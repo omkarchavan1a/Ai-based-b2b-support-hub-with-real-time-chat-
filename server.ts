@@ -44,9 +44,29 @@ dotenv.config();
 
 const PORT = 3000;
 
+// Get custom registered Gemini API key for an organization
+function getOrgGeminiKey(orgId: string): string | undefined {
+  try {
+    const db = getDb();
+    const settings = db.settings.find(s => s.orgId === orgId);
+    if (settings && settings.apiKeys) {
+      const geminiKeyObj = settings.apiKeys.find(k => 
+        k.status === 'active' && 
+        (k.providerName.toLowerCase().includes('gemini') || k.providerName.toLowerCase().includes('google'))
+      );
+      if (geminiKeyObj && geminiKeyObj.apiKey.trim() !== '') {
+        return geminiKeyObj.apiKey.trim();
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching org-specific Gemini key:', err);
+  }
+  return undefined;
+}
+
 // Lazy initialization of Gemini
-function getGemini(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getGemini(customKey?: string): GoogleGenAI | null {
+  const apiKey = customKey || process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim() === '') {
     return null;
   }
@@ -110,7 +130,8 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
 async function getRelevantKBArticles(query: string, orgId: string): Promise<KBArticle[]> {
   const db = getDb();
   const articles = db.kbArticles.filter(a => a.orgId === orgId);
-  const ai = getGemini();
+  const customKey = getOrgGeminiKey(orgId);
+  const ai = getGemini(customKey);
 
   if (!ai || articles.length === 0) {
     return fallbackKeywordSearch(query, articles);
@@ -173,9 +194,10 @@ async function getRelevantKBArticles(query: string, orgId: string): Promise<KBAr
 
 // Generate suggested response using RAG
 async function generateAISuggestion(conversationId: string, customerQuery: string, orgId: string): Promise<string> {
-  const ai = getGemini();
+  const customKey = getOrgGeminiKey(orgId);
+  const ai = getGemini(customKey);
   if (!ai) {
-    return "💡 Configure your Gemini API key in the Settings > Secrets panel in AI Studio to enable automatic RAG suggested replies.";
+    return "💡 Configure your Gemini API key in the Hub Configuration (Settings > Register New Key > Google Gemini) or in the Settings > Secrets panel in AI Studio to enable automatic RAG suggested replies.";
   }
 
   // Fetch relevant KB articles
@@ -476,9 +498,19 @@ async function startServer() {
 
   // Get active configurations & secrets statuses
   app.get('/api/health', (req, res) => {
+    const orgId = req.query.orgId as string;
+    let hasGeminiKey = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY';
+    
+    if (!hasGeminiKey && orgId) {
+      const customKey = getOrgGeminiKey(orgId);
+      if (customKey) {
+        hasGeminiKey = true;
+      }
+    }
+
     res.json({
       status: 'ok',
-      hasGeminiKey: !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+      hasGeminiKey
     });
   });
 

@@ -72,7 +72,7 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
 
   const checkHealth = async () => {
     try {
-      const res = await fetch('/api/health');
+      const res = await fetch(`/api/health?orgId=${orgId}`);
       if (res.ok) {
         const status = await res.json();
         setHasGeminiKey(status.hasGeminiKey);
@@ -114,6 +114,7 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
         setSettings(updated);
         setApiKeys(updated.apiKeys || []);
         setIsSaved(true);
+        checkHealth();
         setTimeout(() => setIsSaved(false), 2000);
       }
     } catch (err) {
