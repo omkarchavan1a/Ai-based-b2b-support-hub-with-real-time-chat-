@@ -1,0 +1,440 @@
+{
+  "organizations": [
+    {
+      "id": "org_stellar",
+      "name": "Stellar B2B SaaS",
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "org_horizon",
+      "name": "Horizon Commerce",
+      "createdAt": "2026-01-15T00:00:00.000Z"
+    },
+    {
+      "id": "org_1783447861102",
+      "name": "OmkarIT",
+      "createdAt": "2026-07-07T18:11:01.102Z"
+    }
+  ],
+  "users": [
+    {
+      "id": "usr_sarah",
+      "orgId": "org_stellar",
+      "role": "owner",
+      "email": "stellar-admin@b2bhub.ai",
+      "name": "Sarah Connor",
+      "avatarUrl": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&h=150&fit=crop&crop=faces",
+      "status": "online",
+      "passwordHash": "489d71587c596d6566bcc5ed85a0a6a01a3f7b7e7052d8dd34c46f2f17bf0ec8e380b8dc81cc4980eb2515234b25bd47011f393ba82c98e8a50b667ec3649b25",
+      "passwordSalt": "15ee2acaace7fce7c754219122a021c7"
+    },
+    {
+      "id": "usr_john",
+      "orgId": "org_stellar",
+      "role": "agent",
+      "email": "stellar-john@b2bhub.ai",
+      "name": "John Doe",
+      "avatarUrl": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop&crop=faces",
+      "status": "online",
+      "passwordHash": "0f6396697fab9f5b6a4895ad5dd1ea3235b7b9bc61b2e38b5455c38e983ac23c2f7e0a0e9d762a859af988635ca800d641156b0505a7dd2b86edccccd85625cb",
+      "passwordSalt": "ad3c7722271ff67509082be5e5feab31"
+    },
+    {
+      "id": "usr_omkar",
+      "orgId": "org_stellar",
+      "role": "agent",
+      "email": "omkar@b2bhub.ai",
+      "name": "Omkar Chavan",
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=faces",
+      "status": "busy",
+      "passwordHash": "397cd92c7eec353194958ae5338ef431ca6a8d6c5370acd5f27a85fdf594328390d0aedaf18fe71cd9841c45c57b1e1f75d4c8f2548287bfe2c156b077a161d4",
+      "passwordSalt": "4e42028f51b1596be5bb4497a0a4849f"
+    },
+    {
+      "id": "usr_1783447861147",
+      "orgId": "org_1783447861102",
+      "role": "owner",
+      "email": "omkar@omkarit.com",
+      "name": "Omkar chavan",
+      "avatarUrl": "https://images.unsplash.com/photo-1500000156283?w=150&h=150&fit=crop&crop=faces",
+      "status": "online",
+      "passwordHash": "5d6d5be5197300d0970191148572e5336dd1656db2b919e772a14d6da7678be5786ead4f834453e07dae28e7b550e6199794373ac7dcea44b2b1949d902df6da",
+      "passwordSalt": "cb743a00094f1feb8c68a9e5ca5b5c3a"
+    }
+  ],
+  "customers": [
+    {
+      "id": "cust_alice",
+      "orgId": "org_stellar",
+      "email": "alice@tesla.com",
+      "name": "Alice Smith",
+      "companyName": "Tesla Corp",
+      "avatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces",
+      "createdAt": "2026-02-01T08:00:00.000Z"
+    },
+    {
+      "id": "cust_bob",
+      "orgId": "org_stellar",
+      "email": "bob@stripe.com",
+      "name": "Bob Miller",
+      "companyName": "Stripe Inc",
+      "avatarUrl": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&h=150&fit=crop&crop=faces",
+      "createdAt": "2026-02-05T09:30:00.000Z"
+    },
+    {
+      "id": "cust_charlie",
+      "orgId": "org_stellar",
+      "email": "charlie@netflix.com",
+      "name": "Charlie Brown",
+      "companyName": "Netflix",
+      "avatarUrl": "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&h=150&fit=crop&crop=faces",
+      "createdAt": "2026-02-10T11:15:00.000Z"
+    }
+  ],
+  "conversations": [
+    {
+      "id": "conv_1",
+      "orgId": "org_stellar",
+      "customerId": "cust_alice",
+      "assignedAgentId": "usr_john",
+      "status": "open",
+      "channel": "widget",
+      "priority": "urgent",
+      "tags": [
+        "sso",
+        "saml",
+        "production"
+      ],
+      "createdAt": "2026-07-07T08:30:00.000Z",
+      "lastMessageAt": "2026-07-07T17:45:45.565Z",
+      "slaBreachTime": "2026-07-07T09:30:00.000Z"
+    },
+    {
+      "id": "conv_2",
+      "orgId": "org_stellar",
+      "customerId": "cust_bob",
+      "assignedAgentId": null,
+      "status": "open",
+      "channel": "widget",
+      "priority": "high",
+      "tags": [
+        "billing",
+        "invoice"
+      ],
+      "createdAt": "2026-07-07T09:00:00.000Z",
+      "lastMessageAt": "2026-07-07T09:05:00.000Z",
+      "slaBreachTime": "2026-07-07T11:00:00.000Z"
+    },
+    {
+      "id": "conv_3",
+      "orgId": "org_stellar",
+      "customerId": "cust_charlie",
+      "assignedAgentId": "usr_sarah",
+      "status": "closed",
+      "channel": "widget",
+      "priority": "medium",
+      "tags": [
+        "api",
+        "webhooks"
+      ],
+      "createdAt": "2026-07-06T14:00:00.000Z",
+      "lastMessageAt": "2026-07-06T15:20:00.000Z",
+      "csatScore": 5,
+      "summary": "Customer wanted to know the webhook payload schema for payments. Agent provided documentation link and a sample payload. Customer verified it worked and closed the ticket."
+    },
+    {
+      "id": "conv_1783448018269",
+      "orgId": "org_1783447861102",
+      "customerId": "cust_charlie",
+      "assignedAgentId": null,
+      "status": "open",
+      "channel": "widget",
+      "priority": "medium",
+      "tags": [
+        "web-widget"
+      ],
+      "createdAt": "2026-07-07T18:13:38.269Z",
+      "lastMessageAt": "2026-07-07T18:13:38.269Z",
+      "slaBreachTime": "2026-07-07T20:13:38.269Z"
+    },
+    {
+      "id": "conv_1783448935923",
+      "orgId": "org_1783447861102",
+      "customerId": "cust_alice",
+      "assignedAgentId": null,
+      "status": "open",
+      "channel": "widget",
+      "priority": "medium",
+      "tags": [
+        "web-widget"
+      ],
+      "createdAt": "2026-07-07T18:28:55.923Z",
+      "lastMessageAt": "2026-07-07T19:05:20.185Z",
+      "slaBreachTime": "2026-07-07T20:28:55.923Z"
+    },
+    {
+      "id": "conv_1783449070849",
+      "orgId": "org_1783447861102",
+      "customerId": "cust_alice",
+      "assignedAgentId": null,
+      "status": "open",
+      "channel": "widget",
+      "priority": "medium",
+      "tags": [
+        "web-widget"
+      ],
+      "createdAt": "2026-07-07T18:31:10.849Z",
+      "lastMessageAt": "2026-07-07T18:31:10.849Z",
+      "slaBreachTime": "2026-07-07T20:31:10.849Z"
+    },
+    {
+      "id": "conv_1783451223089",
+      "orgId": "org_1783447861102",
+      "customerId": "cust_alice",
+      "assignedAgentId": null,
+      "status": "open",
+      "channel": "widget",
+      "priority": "medium",
+      "tags": [
+        "web-widget"
+      ],
+      "createdAt": "2026-07-07T19:07:03.089Z",
+      "lastMessageAt": "2026-07-07T19:07:06.942Z",
+      "slaBreachTime": "2026-07-07T21:07:03.089Z"
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg_1_1",
+      "conversationId": "conv_1",
+      "senderType": "customer",
+      "senderId": "cust_alice",
+      "senderName": "Alice Smith",
+      "content": "Hello, we are attempting to go live with SAML SSO today but our users are getting \"InResponseTo field does not match\" errors. This is blocking our release.",
+      "readAt": "2026-07-07T08:31:00.000Z",
+      "createdAt": "2026-07-07T08:30:00.000Z"
+    },
+    {
+      "id": "msg_1_2",
+      "conversationId": "conv_1",
+      "senderType": "agent",
+      "senderId": "usr_john",
+      "senderName": "John Doe",
+      "content": "Hi Alice! Let me look into that for you. That error typically occurs when the SSO token request expires or there is a server clock skew mismatch between our servers and your Identity Provider (IdP). Which IdP are you using?",
+      "readAt": "2026-07-07T08:36:00.000Z",
+      "createdAt": "2026-07-07T08:35:00.000Z"
+    },
+    {
+      "id": "msg_1_3",
+      "conversationId": "conv_1",
+      "senderType": "customer",
+      "senderId": "cust_alice",
+      "senderName": "Alice Smith",
+      "content": "We are using Okta. I checked our IdP logs and it says the assertion is sent correctly. Can you verify if you accept clock skews up to 5 minutes?",
+      "readAt": "2026-07-07T09:16:00.000Z",
+      "createdAt": "2026-07-07T09:15:00.000Z"
+    },
+    {
+      "id": "msg_2_1",
+      "conversationId": "conv_2",
+      "senderType": "customer",
+      "senderId": "cust_bob",
+      "senderName": "Bob Miller",
+      "content": "Hi, we received an invoice that contains charges for 12 unused seats. We deleted those users last month. Can we get this credited?",
+      "readAt": null,
+      "createdAt": "2026-07-07T09:00:00.000Z"
+    },
+    {
+      "id": "msg_2_2",
+      "conversationId": "conv_2",
+      "senderType": "system",
+      "senderId": "system",
+      "senderName": "System Bot",
+      "content": "Thank you for reaching out! Your ticket has been received and added to our billing queue. A support engineer will review and credit eligible unused seats shortly.",
+      "readAt": null,
+      "createdAt": "2026-07-07T09:05:00.000Z"
+    },
+    {
+      "id": "msg_3_1",
+      "conversationId": "conv_3",
+      "senderType": "customer",
+      "senderId": "cust_charlie",
+      "senderName": "Charlie Brown",
+      "content": "Where can I find the webhook payload JSON schema for the payment.succeeded event?",
+      "readAt": "2026-07-06T14:02:00.000Z",
+      "createdAt": "2026-07-06T14:00:00.000Z"
+    },
+    {
+      "id": "msg_3_2",
+      "conversationId": "conv_3",
+      "senderType": "agent",
+      "senderId": "usr_sarah",
+      "senderName": "Sarah Connor",
+      "content": "Hi Charlie! You can access the complete JSON schema for all webhook events under Settings > Webhooks > Developer Specs in your dashboard. Here is a direct link: https://docs.stellarb2b.com/api/webhooks",
+      "readAt": "2026-07-06T14:12:00.000Z",
+      "createdAt": "2026-07-06T14:10:00.000Z"
+    },
+    {
+      "id": "msg_3_3",
+      "conversationId": "conv_3",
+      "senderType": "customer",
+      "senderId": "cust_charlie",
+      "senderName": "Charlie Brown",
+      "content": "Awesome, that is exactly what I was looking for. Perfect response. I will close this ticket now.",
+      "readAt": "2026-07-06T15:20:00.000Z",
+      "createdAt": "2026-07-06T15:18:00.000Z"
+    },
+    {
+      "id": "msg_3_4",
+      "conversationId": "conv_3",
+      "senderType": "system",
+      "senderId": "system",
+      "senderName": "System Bot",
+      "content": "This conversation was marked as closed. Rate your support experience below.",
+      "readAt": "2026-07-06T15:21:00.000Z",
+      "createdAt": "2026-07-06T15:20:00.000Z"
+    },
+    {
+      "id": "msg_1783446307091",
+      "conversationId": "conv_1",
+      "senderType": "agent",
+      "senderId": "usr_sarah",
+      "senderName": "Sarah Connor",
+      "content": "Hi",
+      "readAt": null,
+      "createdAt": "2026-07-07T17:45:07.091Z"
+    },
+    {
+      "id": "msg_1783446345565",
+      "conversationId": "conv_1",
+      "senderType": "agent",
+      "senderId": "usr_sarah",
+      "senderName": "Sarah Connor",
+      "content": "What is budget of this week",
+      "readAt": null,
+      "createdAt": "2026-07-07T17:45:45.565Z"
+    },
+    {
+      "id": "msg_1783448942733",
+      "conversationId": "conv_1783448935923",
+      "senderType": "customer",
+      "senderId": "cust_alice",
+      "senderName": "Alice Smith",
+      "content": "Hey",
+      "readAt": null,
+      "createdAt": "2026-07-07T18:29:02.734Z"
+    },
+    {
+      "id": "msg_1783451120185",
+      "conversationId": "conv_1783448935923",
+      "senderType": "agent",
+      "senderId": "usr_1783447861147",
+      "senderName": "Omkar chavan",
+      "content": "Hi",
+      "readAt": null,
+      "createdAt": "2026-07-07T19:05:20.185Z",
+      "senderAvatarUrl": "https://images.unsplash.com/photo-1500000156283?w=150&h=150&fit=crop&crop=faces"
+    },
+    {
+      "id": "msg_1783451226942",
+      "conversationId": "conv_1783451223089",
+      "senderType": "customer",
+      "senderId": "cust_alice",
+      "senderName": "Alice Smith",
+      "content": "Hi",
+      "readAt": null,
+      "createdAt": "2026-07-07T19:07:06.942Z",
+      "senderAvatarUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces"
+    }
+  ],
+  "kbArticles": [
+    {
+      "id": "kb_1",
+      "orgId": "org_stellar",
+      "title": "SAML Single Sign-On (SSO) Setup Guide",
+      "category": "Security",
+      "content": "### SAML SSO Integration\n\nStellar B2B supports SAML 2.0 Identity Providers (IdP) including Okta, Azure AD, and OneLogin.\n\n#### Typical Issues:\n1. **InResponseTo field does not match error**:\n   This occurs when the authentication request has expired, or when a user tries to reuse a stale bookmark. Check if your IdP clock skew is under 5 minutes.\n2. **Signature Verification Failed**:\n   Ensure that you have uploaded the correct x509 public signing certificate from Okta/Azure into your Stellar dashboard.\n\n#### Configuration values:\n- **ACS (Assertion Consumer Service) URL**: `https://api.stellarb2b.com/sso/saml/acs`\n- **Entity ID**: `https://api.stellarb2b.com/sso/saml/metadata`\n- **NameID Format**: `urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress`",
+      "createdAt": "2026-01-10T00:00:00.000Z",
+      "updatedAt": "2026-01-10T00:00:00.000Z"
+    },
+    {
+      "id": "kb_2",
+      "orgId": "org_stellar",
+      "title": "Billing Policies & Pro-rated Credits",
+      "category": "Billing",
+      "content": "### Seats & Proration Policies\n\nOur subscription is charged per-seat per-month. \n\n#### Adding Seats:\nWhen you add a new team member, we charge a pro-rated amount for the remainder of the current billing cycle.\n\n#### Deleting Seats:\nWhen you delete a user, the seat remains active until the end of the current billing cycle. However, if you explicitly cancel a seat and want a credit, our policy allows support agents to apply a **Credit Balance** to your account if the seat was empty and unused for more than 15 days of the cycle.\n\nTo apply a refund or credit, go to the agent refund console under customer profiles.",
+      "createdAt": "2026-01-12T00:00:00.000Z",
+      "updatedAt": "2026-01-12T00:00:00.000Z"
+    },
+    {
+      "id": "kb_3",
+      "orgId": "org_stellar",
+      "title": "API Webhook Event Payloads & Signatures",
+      "category": "Technical",
+      "content": "### Webhook Deliveries\n\nWebhooks are dispatched as HTTPS POST payloads containing a JSON payload.\n\n#### Event Schema Example (`payment.succeeded`):\n```json\n{\n  \"event\": \"payment.succeeded\",\n  \"created\": 1783456000,\n  \"data\": {\n    \"amount\": 25000,\n    \"currency\": \"usd\",\n    \"customer\": \"cust_bob\",\n    \"invoiceId\": \"inv_908123\"\n  }\n}\n```\n\n#### Verification:\nWe sign all webhook payloads. Each request contains a Header `X-Stellar-Signature` which is a HMAC-SHA256 signature calculated using your webhook secret key.",
+      "createdAt": "2026-01-15T00:00:00.000Z",
+      "updatedAt": "2026-01-15T00:00:00.000Z"
+    },
+    {
+      "id": "kb_4",
+      "orgId": "org_stellar",
+      "title": "Custom Domain SSL Configuration",
+      "category": "Technical",
+      "content": "### Custom White-Label Domains\n\nTo host your support hub on a custom subdomain like `support.yourcompany.com`:\n\n1. Go to **Settings > Domains**.\n2. Add your custom subdomain.\n3. Create a **CNAME record** with your DNS provider pointing to `ingress.stellarb2b.com`.\n4. We will provision a free Let's Encrypt SSL Certificate automatically within 15 minutes of DNS propagation.",
+      "createdAt": "2026-01-20T00:00:00.000Z",
+      "updatedAt": "2026-01-20T00:00:00.000Z"
+    }
+  ],
+  "aiSuggestionsLogs": [
+    {
+      "id": "log_1783448975050",
+      "conversationId": "conv_1783448935923",
+      "suggestedText": "Hi Alice,\n\nThanks for reaching out! How can I help you today? \n\nIf you have any questions regarding our platform, technical configurations, or account settings, please let me know. I am here to help and can look up any specific details or documentation required to assist you. \n\nLooking forward to hearing from you!",
+      "wasUsed": false,
+      "agentEdited": false,
+      "createdAt": "2026-07-07T18:29:35.050Z"
+    },
+    {
+      "id": "log_1783451229558",
+      "conversationId": "conv_1783451223089",
+      "suggestedText": "Error drafting reply: {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}",
+      "wasUsed": false,
+      "agentEdited": false,
+      "createdAt": "2026-07-07T19:07:09.559Z"
+    }
+  ],
+  "settings": [
+    {
+      "orgId": "org_stellar",
+      "slaConfig": {
+        "low": 1440,
+        "medium": 480,
+        "high": 120,
+        "urgent": 60
+      },
+      "businessHours": {
+        "enabled": true,
+        "start": "09:00",
+        "end": "18:00",
+        "timezone": "UTC"
+      },
+      "routingRule": "round-robin"
+    },
+    {
+      "orgId": "org_1783447861102",
+      "slaConfig": {
+        "low": 1440,
+        "medium": 480,
+        "high": 120,
+        "urgent": 60
+      },
+      "businessHours": {
+        "enabled": false,
+        "start": "09:00",
+        "end": "17:00",
+        "timezone": "UTC"
+      },
+      "routingRule": "round-robin"
+    }
+  ]
+}
