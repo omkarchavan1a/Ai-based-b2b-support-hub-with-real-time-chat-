@@ -258,8 +258,9 @@ async function startServer() {
   const app = express();
   const server = http.createServer(app);
   
-  // Parse JSON bodies
-  app.use(express.json());
+  // Parse JSON bodies with a custom size limit to allow base64 profile image uploads
+  app.use(express.json({ limit: '15mb' }));
+  app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
   // WebSocket Server Setup
   const wss = new WebSocketServer({ noServer: true });

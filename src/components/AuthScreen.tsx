@@ -92,27 +92,31 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           body: JSON.stringify({ email, password })
         });
 
-        const data = await res.json();
-        const elapsed = Date.now() - startTime;
+        setIsLoading(false);
+        setStatusMessage('');
 
         if (res.ok) {
+          const data = await res.json();
           setStatusMessage('Security handshake complete...');
           // Optional short timeout for smooth transition
           setTimeout(() => {
             onAuthSuccess(data.token, data.user);
           }, 400);
         } else {
-          setIsLoading(false);
-          setStatusMessage('');
+          let errorMsg = 'Incorrect email or password.';
+          try {
+            const data = await res.json();
+            errorMsg = data.error || errorMsg;
+          } catch (e) {
+            errorMsg = `Server error (${res.status}). Please try again later.`;
+          }
+
           if (res.status === 429) {
-            // IP Rate Limit Blocked
-            setErrorMessage(data.error || 'Too many login attempts. Please try again later.');
+            setErrorMessage(errorMsg || 'Too many login attempts. Please try again later.');
           } else if (res.status === 423) {
-            // Locked out
-            setErrorMessage(data.error || 'This account is locked. Please try again in 15 minutes.');
+            setErrorMessage(errorMsg || 'This account is locked. Please try again in 15 minutes.');
           } else {
-            // Generic incorrect email or password
-            setErrorMessage(data.error || 'Incorrect email or password.');
+            setErrorMessage(errorMsg);
           }
         }
       } catch (err) {
@@ -141,16 +145,29 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           body: JSON.stringify({ email, password, name, companyName, avatarUrl: selectedAvatarUrl })
         });
 
-        const data = await res.json();
         setIsLoading(false);
         setStatusMessage('');
 
         if (res.ok) {
+          const data = await res.json();
           onAuthSuccess(data.token, data.user);
         } else {
-          setErrorMessage(data.error || 'Registration failed. Please check inputs.');
+          let errorMsg = 'Registration failed. Please check inputs.';
+          try {
+            const data = await res.json();
+            errorMsg = data.error || errorMsg;
+          } catch (e) {
+            if (res.status === 413) {
+              errorMsg = 'Profile photo is too large. Please select a smaller photo or a preset.';
+            } else {
+              errorMsg = `Server returned an error (${res.status}). Please try again.`;
+            }
+          }
+          setErrorMessage(errorMsg);
         }
       } catch (err) {
+        setIsLoading(false);
+        setStatusMessage('');
         setErrorMessage('Failed to connect securely to the server during registration.');
       }
     }
