@@ -46,8 +46,16 @@ export default function App() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [filterMode, setFilterMode] = useState<'all' | 'online'>('all');
   const [confirmClearOffline, setConfirmClearOffline] = useState(false);
+  const [dbType, setDbType] = useState<string>('Local');
 
   const socketRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    fetch('/api/db-status')
+      .then(res => res.json())
+      .then(data => setDbType(data.type))
+      .catch(() => setDbType('Local'));
+  }, []);
 
   // Session verification on mount or when token changes
   useEffect(() => {
@@ -483,6 +491,16 @@ export default function App() {
           {/* Connection badge */}
           <div className={`p-1.5 rounded-full ${isConnected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`} title={isConnected ? 'WS Link Active' : 'WS Link Off'}>
             {isConnected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4 animate-pulse" />}
+          </div>
+
+          {/* Database Badge */}
+          <div 
+            className={`w-7 h-7 rounded-full flex items-center justify-center border ${dbType === 'PostgreSQL' ? 'bg-indigo-950 border-indigo-800 text-indigo-400' : 'bg-zinc-800 border-zinc-700 text-amber-500'}`} 
+            title={`Database: ${dbType}`}
+          >
+            <span className="text-[8px] font-extrabold font-mono tracking-tighter">
+              {dbType === 'PostgreSQL' ? 'PG' : 'JSON'}
+            </span>
           </div>
 
           {/* Agent Roleplay Dropdown Trigger */}

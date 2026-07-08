@@ -10,6 +10,11 @@ import {
   KBArticle, AISuggestionLog, SupportSettings 
 } from '../types';
 import { hashPassword } from './auth';
+import { 
+  isPgActive, initPgSchema, pgGetDb, pgSaveDb, 
+  pgSaveMessage, pgUpdateConversationStatus, pgAssignConversation, 
+  pgUpdateSettings 
+} from './postgres';
 
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
 
@@ -297,8 +302,28 @@ const DEFAULT_DB: Schema = {
   ]
 };
 
-// Initialize DB file
-export function initDb() {
+// PostgreSQL in-memory cache for ultra-fast synchronous operations
+let pgCache: Schema | null = null;
+
+// Initialize PostgreSQL connection, tables, and seeding
+export async function initPgDb() {
+  if (!isPgActive()) {
+    console.log('PostgreSQL is not configured. Falling back to local JSON file database.');
+    return;
+  }
+  try {
+    // Pass local getDb for migration / seeding if Postgres is empty
+    await initPgSchema(getDbLocal);
+    // Fetch and populate the in-memory cache
+    pgCache = await pgGetDb();
+    console.log('PostgreSQL connected and cached successfully.');
+  } catch (err) {
+    console.error('Failed to initialize PostgreSQL Cache, falling back to local database:', err);
+  }
+}
+
+// Local DB file reader/writer (used as fallback or for PostgreSQL migration)
+function getDbLocal(): Schema {
   const dir = path.dirname(DB_FILE);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -313,6 +338,7 @@ export function initDb() {
       }
     });
     fs.writeFileSync(DB_FILE, JSON.stringify(DEFAULT_DB, null, 2), 'utf-8');
+    return DEFAULT_DB;
   } else {
     try {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
@@ -329,13 +355,27 @@ export function initDb() {
       if (updated) {
         fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
       }
+      return db;
     } catch (e) {
       console.error('Error during db initialization or self-healing upgrade:', e);
+      return DEFAULT_DB;
     }
   }
 }
 
+// Initialize DB file
+export function initDb() {
+  if (isPgActive()) {
+    // If PG is active, initialization is handled in initPgDb asynchronously at startup.
+    return;
+  }
+  getDbLocal();
+}
+
 export function getDb(): Schema {
+  if (isPgActive() && pgCache) {
+    return pgCache;
+  }
   initDb();
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
@@ -347,6 +387,11 @@ export function getDb(): Schema {
 }
 
 export function saveDb(data: Schema) {
+  if (isPgActive()) {
+    pgCache = data;
+    pgSaveDb(data).catch(err => console.error('Asynchronous pgSaveDb error:', err));
+    return;
+  }
   initDb();
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
@@ -399,6 +444,11 @@ export function saveMessage(msg: Message): Message {
   }
   
   saveDb(db);
+  
+  if (isPgActive()) {
+    pgSaveMessage(msg).catch(err => console.error('Asynchronous pgSaveMessage error:', err));
+  }
+  
   return msg;
 }
 
@@ -411,6 +461,11 @@ export function updateConversationStatus(id: string, status: 'open' | 'pending' 
       db.conversations[index].csatScore = rating;
     }
     saveDb(db);
+    
+    if (isPgActive()) {
+      pgUpdateConversationStatus(id, status, rating).catch(err => console.error('Asynchronous pgUpdateConversationStatus error:', err));
+    }
+    
     return db.conversations[index];
   }
   return null;
@@ -422,6 +477,11 @@ export function assignConversation(id: string, agentId: string | null): Conversa
   if (index !== -1) {
     db.conversations[index].assignedAgentId = agentId;
     saveDb(db);
+    
+    if (isPgActive()) {
+      pgAssignConversation(id, agentId).catch(err => console.error('Asynchronous pgAssignConversation error:', err));
+    }
+    
     return db.conversations[index];
   }
   return null;
@@ -459,5 +519,10 @@ export function updateSettings(orgId: string, updates: Partial<SupportSettings>)
     db.settings.push(newSettings);
   }
   saveDb(db);
+  
+  if (isPgActive()) {
+    pgUpdateSettings(orgId, updates).catch(err => console.error('Asynchronous pgUpdateSettings error:', err));
+  }
+  
   return getSettings(orgId);
 }

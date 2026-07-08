@@ -20,9 +20,11 @@ import {
   updateConversationStatus,
   assignConversation,
   getSettings,
-  updateSettings
+  updateSettings,
+  initPgDb
 } from './src/server/db';
 import { Message, Conversation, KBArticle, AISuggestionLog } from './src/types';
+import { isPgActive } from './src/server/postgres';
 import {
   getClientIp,
   checkRateLimit,
@@ -255,6 +257,9 @@ Instructions:
 }
 
 async function startServer() {
+  // Initialize Database (PostgreSQL if DATABASE_URL is set, otherwise JSON fallback)
+  await initPgDb();
+
   const app = express();
   const server = http.createServer(app);
   
@@ -1047,6 +1052,14 @@ async function startServer() {
     const finalOrgId = orgId || 'org_stellar';
     const articles = await getRelevantKBArticles(query, finalOrgId);
     res.json(articles);
+  });
+
+  // Database Connection Status API
+  app.get('/api/db-status', (req: any, res: any) => {
+    res.json({
+      active: isPgActive(),
+      type: isPgActive() ? 'PostgreSQL' : 'JSON Fallback'
+    });
   });
 
   // Analytics APIs (Protected & Tenant Isolated)
