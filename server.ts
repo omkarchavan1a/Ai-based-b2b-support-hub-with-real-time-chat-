@@ -64,6 +64,53 @@ function getOrgGeminiKey(orgId: string): string | undefined {
   return undefined;
 }
 
+// Get any custom active AI provider key registered for an organization
+function getOrgActiveAIKey(orgId: string): { provider: string; key: string } | undefined {
+  try {
+    const db = getDb();
+    const settings = db.settings.find(s => s.orgId === orgId);
+    if (settings && settings.apiKeys) {
+      const aiKeyObj = settings.apiKeys.find(k => {
+        if (k.status !== 'active' || !k.apiKey || k.apiKey.trim() === '') return false;
+        const name = k.providerName.toLowerCase();
+        return name.includes('gemini') || 
+               name.includes('google') || 
+               name.includes('openai') || 
+               name.includes('gpt') || 
+               name.includes('chatgpt') || 
+               name.includes('anthropic') || 
+               name.includes('claude') || 
+               name.includes('deepseek') || 
+               name.includes('openrouter') || 
+               name.includes('groq') || 
+               name.includes('cohere');
+      });
+      
+      if (aiKeyObj) {
+        let provider = 'gemini';
+        const name = aiKeyObj.providerName.toLowerCase();
+        if (name.includes('openai') || name.includes('gpt') || name.includes('chatgpt')) {
+          provider = 'openai';
+        } else if (name.includes('anthropic') || name.includes('claude')) {
+          provider = 'anthropic';
+        } else if (name.includes('deepseek')) {
+          provider = 'deepseek';
+        } else if (name.includes('openrouter')) {
+          provider = 'openrouter';
+        } else if (name.includes('groq')) {
+          provider = 'groq';
+        } else if (name.includes('cohere')) {
+          provider = 'cohere';
+        }
+        return { provider, key: aiKeyObj.apiKey.trim() };
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching org-specific active AI key:', err);
+  }
+  return undefined;
+}
+
 // Lazy initialization of Gemini
 function getGemini(customKey?: string): GoogleGenAI | null {
   const apiKey = customKey || process.env.GEMINI_API_KEY;
@@ -126,39 +173,72 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Semantic Search using Gemini Embeddings
+// Generate embedding for specified AI provider
+async function getAIEmbedding(provider: string, apiKey: string, text: string): Promise<number[] | null> {
+  try {
+    if (provider === 'gemini') {
+      const ai = getGemini(apiKey);
+      if (!ai) return null;
+      const res: any = await ai.models.embedContent({
+        model: 'gemini-embedding-2-preview',
+        contents: text
+      });
+      return res.embedding?.values || null;
+    }
+
+    if (provider === 'openai') {
+      const response = await fetch('https://api.openai.com/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'text-embedding-3-small',
+          input: text
+        })
+      });
+      if (response.ok) {
+        const data: any = await response.json();
+        return data.data?.[0]?.embedding || null;
+      } else {
+        const err = await response.text();
+        console.error('OpenAI embedding endpoint error:', err);
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to generate embedding for provider ${provider}:`, err);
+  }
+  return null;
+}
+
+// Semantic Search using Gemini or OpenAI Embeddings dynamically
 async function getRelevantKBArticles(query: string, orgId: string): Promise<KBArticle[]> {
   const db = getDb();
   const articles = db.kbArticles.filter(a => a.orgId === orgId);
-  const customKey = getOrgGeminiKey(orgId);
-  const ai = getGemini(customKey);
+  const activeAI = getOrgActiveAIKey(orgId) || (
+    process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+      ? { provider: 'gemini', key: process.env.GEMINI_API_KEY }
+      : undefined
+  );
 
-  if (!ai || articles.length === 0) {
+  if (!activeAI || articles.length === 0) {
     return fallbackKeywordSearch(query, articles);
   }
 
   try {
     // Generate embedding for query
-    const queryEmbeddingResponse: any = await ai.models.embedContent({
-      model: 'gemini-embedding-2-preview',
-      contents: query
-    });
-
-    const queryVector = queryEmbeddingResponse.embedding?.values;
-    if (!queryVector) {
+    const queryVector = await getAIEmbedding(activeAI.provider, activeAI.key, query);
+    if (!queryVector || queryVector.length === 0) {
       return fallbackKeywordSearch(query, articles);
     }
 
-    // Ensure all articles have embeddings. If not, generate and save them.
+    // Ensure all articles have embeddings matching the active provider vector length
     let updatedDb = false;
     for (const article of articles) {
-      if (!article.embedding || article.embedding.length === 0) {
+      if (!article.embedding || article.embedding.length !== queryVector.length) {
         try {
-          const artEmbedRes: any = await ai.models.embedContent({
-            model: 'gemini-embedding-2-preview',
-            contents: `${article.title}\n${article.category}\n${article.content}`
-          });
-          const values = artEmbedRes.embedding?.values;
+          const values = await getAIEmbedding(activeAI.provider, activeAI.key, `${article.title}\n${article.category}\n${article.content}`);
           if (values) {
             article.embedding = values;
             updatedDb = true;
@@ -175,7 +255,7 @@ async function getRelevantKBArticles(query: string, orgId: string): Promise<KBAr
 
     // Scored by cosine similarity
     const scored = articles
-      .filter(art => art.embedding && art.embedding.length > 0)
+      .filter(art => art.embedding && art.embedding.length === queryVector.length)
       .map(art => {
         const similarity = cosineSimilarity(queryVector, art.embedding!);
         return { art, similarity };
@@ -192,12 +272,191 @@ async function getRelevantKBArticles(query: string, orgId: string): Promise<KBAr
   }
 }
 
+// Generate generic AI completion from any supported LLM provider
+async function generateGenericAISuggestion(provider: string, apiKey: string, prompt: string): Promise<string> {
+  console.log(`Generating AI suggestion using provider: ${provider}...`);
+  
+  if (provider === 'gemini') {
+    const ai = getGemini(apiKey);
+    if (!ai) throw new Error('Gemini API key is invalid or not provided');
+    const modelsToTry = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+    for (const modelName of modelsToTry) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: { temperature: 0.2 }
+          });
+          if (response && response.text) {
+            return response.text;
+          }
+        } catch (err: any) {
+          console.error(`Gemini model ${modelName} attempt ${attempt} failed:`, err);
+          const errStr = String(err.message || err || '').toLowerCase();
+          const isTemporary = errStr.includes('503') || errStr.includes('unavailable') || errStr.includes('429');
+          if (isTemporary && attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+        }
+      }
+    }
+    throw new Error('All Gemini model generation attempts failed');
+  }
+
+  if (provider === 'openai') {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2
+      })
+    });
+    
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} - ${errText}`);
+    }
+    
+    const data: any = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  if (provider === 'anthropic') {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-haiku-20241022',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Anthropic API error: ${response.status} - ${errText}`);
+    }
+
+    const data: any = await response.json();
+    return data.content?.[0]?.text || '';
+  }
+
+  if (provider === 'deepseek') {
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`DeepSeek API error: ${response.status} - ${errText}`);
+    }
+
+    const data: any = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  if (provider === 'groq') {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Groq API error: ${response.status} - ${errText}`);
+    }
+
+    const data: any = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  if (provider === 'openrouter') {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-3-8b-instruct:free',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenRouter API error: ${response.status} - ${errText}`);
+    }
+
+    const data: any = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  if (provider === 'cohere') {
+    const response = await fetch('https://api.cohere.com/v1/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        message: prompt,
+        model: 'command-r-plus',
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Cohere API error: ${response.status} - ${errText}`);
+    }
+
+    const data: any = await response.json();
+    return data.text || '';
+  }
+
+  throw new Error(`Unsupported AI provider: ${provider}`);
+}
+
 // Generate suggested response using RAG
 async function generateAISuggestion(conversationId: string, customerQuery: string, orgId: string): Promise<string> {
-  const customKey = getOrgGeminiKey(orgId);
-  const ai = getGemini(customKey);
-  if (!ai) {
-    return "💡 Configure your Gemini API key in the Hub Configuration (Settings > Register New Key > Google Gemini) or in the Settings > Secrets panel in AI Studio to enable automatic RAG suggested replies.";
+  const activeAI = getOrgActiveAIKey(orgId) || (
+    process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+      ? { provider: 'gemini', key: process.env.GEMINI_API_KEY }
+      : undefined
+  );
+
+  if (!activeAI) {
+    return "💡 Configure an API key in the Hub Configuration (Settings > Register New Key) or in the Settings > Secrets panel in AI Studio to enable automatic RAG suggested replies.";
   }
 
   // Fetch relevant KB articles
@@ -233,49 +492,17 @@ Instructions:
 3. Be professional and solution-oriented.
 4. Provide the exact text that the agent can review and click "Send". Do not include intro greetings like "Here is a draft response". Send ONLY the response text itself.`;
 
-  // Models to attempt in order (standard first, lightweight fallback second)
-  const modelsToTry = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
-  const maxRetriesPerModel = 2;
-
-  for (const modelName of modelsToTry) {
-    for (let attempt = 1; attempt <= maxRetriesPerModel; attempt++) {
-      try {
-        console.log(`AI suggestion: Attempt ${attempt} using model '${modelName}'...`);
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: prompt,
-          config: {
-            temperature: 0.2
-          }
-        });
-
-        if (response && response.text) {
-          return response.text;
-        }
-      } catch (error: any) {
-        console.error(`AI suggestion error on model '${modelName}' (attempt ${attempt}):`, error);
-
-        // Check if error suggests a temporary high demand, 503, 429, or overload
-        const errStr = String(error.message || error || '').toLowerCase();
-        const isTemporary = errStr.includes('503') || 
-                            errStr.includes('unavailable') || 
-                            errStr.includes('overloaded') || 
-                            errStr.includes('resource_exhausted') || 
-                            errStr.includes('429') ||
-                            errStr.includes('limit');
-
-        if (isTemporary && attempt < maxRetriesPerModel) {
-          const waitTime = attempt * 1500;
-          console.log(`Temporary high load or 503 error on Gemini. Retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          continue;
-        }
-      }
+  try {
+    const responseText = await generateGenericAISuggestion(activeAI.provider, activeAI.key, prompt);
+    if (responseText) {
+      return responseText;
     }
+  } catch (error: any) {
+    console.error(`AI suggestion generation failed via ${activeAI.provider}:`, error);
   }
 
   // Beautiful human-readable fallback if all attempts/models fail due to rate limit/503
-  return "💡 **AI Draft Copilot is temporarily unavailable**\n\nThe AI suggestions model is currently experiencing extremely high demand. Please craft your response manually or click to retry generating once the customer sends another message.";
+  return `💡 **AI Draft Copilot (${activeAI.provider.toUpperCase()}) is temporarily unavailable**\n\nThe AI suggestions model is currently experiencing extremely high demand or an authentication issue. Please verify your registered API key or craft your response manually.`;
 }
 
 async function startServer() {
@@ -500,17 +727,22 @@ async function startServer() {
   app.get('/api/health', (req, res) => {
     const orgId = req.query.orgId as string;
     let hasGeminiKey = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY';
+    let activeProvider = 'Google Gemini';
     
-    if (!hasGeminiKey && orgId) {
-      const customKey = getOrgGeminiKey(orgId);
-      if (customKey) {
+    if (orgId) {
+      const activeAI = getOrgActiveAIKey(orgId);
+      if (activeAI) {
         hasGeminiKey = true;
+        activeProvider = activeAI.provider === 'gemini' 
+          ? 'Google Gemini' 
+          : activeAI.provider.charAt(0).toUpperCase() + activeAI.provider.slice(1);
       }
     }
 
     res.json({
       status: 'ok',
-      hasGeminiKey
+      hasGeminiKey,
+      activeProvider
     });
   });
 

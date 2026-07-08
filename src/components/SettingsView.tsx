@@ -20,6 +20,7 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
   const [settings, setSettings] = useState<SupportSettings | null>(null);
   const [isSaved, setIsSaved] = useState(false);
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
+  const [activeProvider, setActiveProvider] = useState<string>('Google Gemini');
   const [copied, setCopied] = useState(false);
 
   // SLA states
@@ -76,6 +77,9 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
       if (res.ok) {
         const status = await res.json();
         setHasGeminiKey(status.hasGeminiKey);
+        if (status.activeProvider) {
+          setActiveProvider(status.activeProvider);
+        }
       }
     } catch (err) {
       console.error('Failed to verify API key status:', err);
@@ -200,7 +204,7 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
           <p className="text-xs text-zinc-500 mt-1">Configure automated routing rules, SLA countdown timers, security triggers, and grab embed codes.</p>
         </div>
 
-        {/* Gemini Secrets Monitor Panel */}
+        {/* AI Secrets Monitor Panel */}
         <div className={`border rounded-2xl p-4 shadow-sm flex items-start space-x-4 ${
           hasGeminiKey 
             ? 'border-emerald-100 bg-emerald-50/50 text-emerald-950' 
@@ -213,12 +217,12 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
           )}
           <div className="flex-1">
             <h3 className="font-display text-xs font-semibold flex items-center">
-              {hasGeminiKey ? 'Gemini AI Integration Active' : 'Gemini Key Missing (RAG suggestion drafts are disabled)'}
+              {hasGeminiKey ? `${activeProvider} AI Integration Active` : 'AI Key Missing (RAG suggestion drafts are disabled)'}
             </h3>
             <p className="text-[11px] mt-1 leading-relaxed opacity-90">
               {hasGeminiKey 
-                ? 'Your server is securely authenticated with Google Gemini. Automated suggested replies from your local Knowledge Base are actively analyzing customer inquiries in real-time.'
-                : 'To enable automatic RAG draft suggestions from your Knowledge Base, you need to configure your Gemini key. Open the secrets panel in the top-right Settings > Secrets menu in AI Studio and define GEMINI_API_KEY. It will compile and activate instantly.'
+                ? `Your server is securely authenticated with ${activeProvider}. Automated suggested replies from your local Knowledge Base are actively analyzing customer inquiries in real-time.`
+                : 'To enable automatic RAG draft suggestions from your Knowledge Base, you can register any LLM API provider key (Google Gemini, OpenAI, Anthropic Claude, DeepSeek, Groq, OpenRouter, Cohere) under the "Project API Keys & Providers" section below or configure your GEMINI_API_KEY inside the Settings > Secrets panel.'
               }
             </p>
           </div>
