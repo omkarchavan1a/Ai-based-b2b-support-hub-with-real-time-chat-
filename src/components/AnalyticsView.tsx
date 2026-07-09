@@ -8,6 +8,7 @@ import {
   BarChart2, Users, Star, Clock, Sparkles, AlertCircle, 
   CheckCircle, ChevronRight, TrendingUp, HelpCircle, Info 
 } from 'lucide-react';
+import { User as AgentType } from '../types';
 
 interface AnalyticsData {
   totalTickets: number;
@@ -23,9 +24,10 @@ interface AnalyticsData {
 interface AnalyticsViewProps {
   orgId: string;
   token: string;
+  allAgents?: AgentType[];
 }
 
-export default function AnalyticsView({ orgId, token }: AnalyticsViewProps) {
+export default function AnalyticsView({ orgId, token, allAgents = [] }: AnalyticsViewProps) {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -66,6 +68,23 @@ export default function AnalyticsView({ orgId, token }: AnalyticsViewProps) {
   const openPct = Math.round((data.openTickets / total) * 100);
   const pendingPct = Math.round((data.pendingTickets / total) * 100);
   const closedPct = Math.round((data.closedTickets / total) * 100);
+
+  // Calculate dynamic coordinates for weekly ingress trend chart (SVG viewBox is 500x150)
+  const maxVolume = Math.max(...(data.ticketVolumeTrends?.map(t => t.tickets) || []), 1);
+  const trendPoints = (data.ticketVolumeTrends || []).map((t, idx) => {
+    const x = 30 + idx * 70; // Map index 0-6 to horizontal spacing (30 to 450)
+    const y = 120 - (t.tickets / maxVolume) * 90; // Fit inside graph area (30 to 120 height)
+    return { x, y, name: t.name, tickets: t.tickets };
+  });
+
+  // Construct dynamic line path and dynamic filled area path
+  const dynamicLinePath = trendPoints.reduce((acc, pt, idx) => {
+    return idx === 0 ? `M ${pt.x} ${pt.y}` : `${acc} L ${pt.x} ${pt.y}`;
+  }, '');
+
+  const dynamicAreaPath = trendPoints.length > 0
+    ? `${dynamicLinePath} L ${trendPoints[trendPoints.length - 1].x} 130 L ${trendPoints[0].x} 130 Z`
+    : '';
 
   return (
     <div className="flex-1 overflow-y-auto p-6 bg-zinc-50/50">
@@ -154,19 +173,23 @@ export default function AnalyticsView({ orgId, token }: AnalyticsViewProps) {
               <line x1="0" y1="130" x2="500" y2="130" stroke="#f4f4f5" strokeWidth="1" />
 
               {/* Data curve */}
-              <path
-                d="M 20 130 C 80 80, 120 40, 160 70 C 220 110, 260 30, 320 20 C 380 15, 420 90, 480 50"
-                fill="none"
-                stroke="url(#chartGradient)"
-                strokeWidth="3.5"
-                strokeLinecap="round"
-              />
+              {dynamicLinePath && (
+                <path
+                  d={dynamicLinePath}
+                  fill="none"
+                  stroke="url(#chartGradient)"
+                  strokeWidth="3.5"
+                  strokeLinecap="round"
+                />
+              )}
 
               {/* Shading below curve */}
-              <path
-                d="M 20 130 C 80 80, 120 40, 160 70 C 220 110, 260 30, 320 20 C 380 15, 420 90, 480 50 L 480 140 L 20 140 Z"
-                fill="url(#areaGradient)"
-              />
+              {dynamicAreaPath && (
+                <path
+                  d={dynamicAreaPath}
+                  fill="url(#areaGradient)"
+                />
+              )}
 
               {/* Gradients */}
               <defs>
@@ -181,9 +204,40 @@ export default function AnalyticsView({ orgId, token }: AnalyticsViewProps) {
               </defs>
 
               {/* Interactive nodes */}
-              <circle cx="160" cy="70" r="5" fill="#4f46e5" stroke="white" strokeWidth="1.5" />
-              <circle cx="320" cy="20" r="5" fill="#4f46e5" stroke="white" strokeWidth="1.5" />
-              <circle cx="480" cy="50" r="5" fill="#6366f1" stroke="white" strokeWidth="1.5" />
+              {trendPoints.map((pt, idx) => (
+                <g key={idx} className="group/node cursor-pointer">
+                  <circle
+                    cx={pt.x}
+                    cy={pt.y}
+                    r="4.5"
+                    fill="#4f46e5"
+                    stroke="white"
+                    strokeWidth="1.5"
+                    className="transition-all duration-150 group-hover/node:r-6 group-hover/node:fill-indigo-600"
+                  />
+                  {/* Tooltip text showing above node on hover */}
+                  <g className="opacity-0 group-hover/node:opacity-100 transition-opacity duration-150">
+                    <rect
+                      x={pt.x - 20}
+                      y={pt.y - 25}
+                      width="40"
+                      height="16"
+                      rx="4"
+                      fill="#18181b"
+                      className="shadow-md"
+                    />
+                    <text
+                      x={pt.x}
+                      y={pt.y - 14}
+                      textAnchor="middle"
+                      fill="white"
+                      className="text-[9px] font-bold font-mono"
+                    >
+                      {pt.tickets} tix
+                    </text>
+                  </g>
+                </g>
+              ))}
             </svg>
 
             {/* Labels overlay */}
@@ -245,7 +299,7 @@ export default function AnalyticsView({ orgId, token }: AnalyticsViewProps) {
                 <span className="text-zinc-900 font-semibold">{data.closedTickets} ({closedPct}%)</span>
               </div>
               <div className="w-full bg-zinc-100 h-2 rounded-full overflow-hidden">
-                <div className="bg-emerald-50 h-full rounded-full transition-all" style={{ width: `${closedPct}%` }} />
+                <div className="bg-emerald-500 h-full rounded-full transition-all" style={{ width: `${closedPct}%` }} />
               </div>
             </div>
           </div>
@@ -254,6 +308,60 @@ export default function AnalyticsView({ orgId, token }: AnalyticsViewProps) {
             <Info className="w-4 h-4 text-zinc-400 shrink-0 mt-0.5" />
             <span className="leading-relaxed">All metrics are evaluated in real-time. Closing active tickets updates the CSAT score.</span>
           </div>
+        </div>
+      </div>
+
+      {/* Real-time Team Presence Panel */}
+      <div className="mt-6 bg-white border border-zinc-200 rounded-2xl p-5 shadow-sm text-left">
+        <div className="flex items-center justify-between mb-4 pb-3 border-b border-zinc-100">
+          <div>
+            <h3 className="text-xs font-semibold text-zinc-900 font-display uppercase tracking-wider">Live Agent Presence Simulation</h3>
+            <p className="text-[10px] text-zinc-500 mt-1">Real-time status tracking of support team members. Simulated agent presence rotates over time.</p>
+          </div>
+          <span className="text-[9px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-600 border border-emerald-200/50 px-2.5 py-1 rounded-full animate-pulse flex items-center space-x-1">
+            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1 inline-block" />
+            <span>Active Team Sync</span>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {allAgents && allAgents.length > 0 ? (
+            allAgents.map(agent => {
+              const statusColors = {
+                online: { text: 'text-emerald-700 bg-emerald-50 border-emerald-100', dot: 'bg-emerald-500', label: 'Online' },
+                busy: { text: 'text-rose-700 bg-rose-50 border-rose-100', dot: 'bg-rose-500', label: 'Busy' },
+                away: { text: 'text-amber-700 bg-amber-50 border-amber-100', dot: 'bg-amber-500', label: 'Away' },
+                offline: { text: 'text-zinc-500 bg-zinc-100 border-zinc-200', dot: 'bg-zinc-400', label: 'Offline' }
+              };
+              const config = statusColors[agent.status] || statusColors.offline;
+              
+              return (
+                <div key={agent.id} className="border border-zinc-100 rounded-xl p-3.5 flex items-center justify-between hover:border-zinc-200 hover:bg-zinc-50/20 transition-all shadow-2xs">
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="relative shrink-0">
+                      <img 
+                        src={agent.avatarUrl} 
+                        alt={agent.name} 
+                        className="w-10 h-10 rounded-full object-cover border border-zinc-100"
+                      />
+                      <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${config.dot}`} />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-zinc-950 block truncate">{agent.name}</span>
+                      <span className="text-[10px] text-zinc-400 font-semibold uppercase tracking-wider block mt-0.5 truncate">{agent.role}</span>
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full border shrink-0 ${config.text}`}>
+                    {config.label}
+                  </span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="col-span-3 text-center py-6 text-xs text-zinc-400">
+              No support agents registered in organization workspace.
+            </div>
+          )}
         </div>
       </div>
     </div>

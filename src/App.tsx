@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, BookOpen, BarChart2, Settings as SettingsIcon, 
   Sparkles, UserCheck, Shield, Wifi, WifiOff, RefreshCw, 
-  Layers, ChevronRight, Inbox, HelpCircle, LogOut, Trash2 
+  Layers, ChevronRight, Inbox, HelpCircle, LogOut, Trash2, Plus, X
 } from 'lucide-react';
 
 import ChatWindow from './components/ChatWindow';
@@ -16,6 +16,7 @@ import AnalyticsView from './components/AnalyticsView';
 import SettingsView from './components/SettingsView';
 import CustomerWidgetSimulator from './components/CustomerWidgetSimulator';
 import AuthScreen from './components/AuthScreen';
+import OnboardingTour from './components/OnboardingTour';
 
 import { Conversation, Message, Customer, User as AgentType } from './types';
 
@@ -48,6 +49,11 @@ export default function App() {
   const [confirmClearOffline, setConfirmClearOffline] = useState(false);
   const [dbType, setDbType] = useState<string>('Local');
 
+  // Interactive Onboarding & WS Simulation States
+  const [isTourOpen, setIsTourOpen] = useState(false);
+  const [isConnectionPopoverOpen, setIsConnectionPopoverOpen] = useState(false);
+  const [isWsSimulatedOffline, setIsWsSimulatedOffline] = useState(false);
+
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -56,6 +62,34 @@ export default function App() {
       .then(data => setDbType(data.type))
       .catch(() => setDbType('Local'));
   }, []);
+
+  // Auto-launch guide for new visitors
+  useEffect(() => {
+    if (token && currentUser) {
+      const completed = localStorage.getItem('onboarding_completed');
+      if (!completed) {
+        const timer = setTimeout(() => {
+          setIsTourOpen(true);
+        }, 1500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [token, currentUser]);
+
+  // Synchronize WS connection drops manually
+  useEffect(() => {
+    if (currentUser && token) {
+      if (isWsSimulatedOffline) {
+        if (socketRef.current) {
+          socketRef.current.close();
+          socketRef.current = null;
+        }
+        setIsConnected(false);
+      } else {
+        connectAgentWebSocket(currentUser.id, token);
+      }
+    }
+  }, [isWsSimulatedOffline]);
 
   // Session verification on mount or when token changes
   useEffect(() => {
@@ -167,6 +201,11 @@ export default function App() {
       socketRef.current.close();
     }
 
+    if (isWsSimulatedOffline) {
+      setIsConnected(false);
+      return;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws?role=agent&userId=${userId}&token=${authToken}`;
     const ws = new WebSocket(wsUrl);
@@ -236,11 +275,17 @@ export default function App() {
           return current;
         });
       } else if (type === 'conversation:new') {
-        const { conversation } = payload;
+        const { conversation, customer } = payload;
         setConversations(prev => {
           if (prev.some(c => c.id === conversation.id)) return prev;
           return [conversation, ...prev];
         });
+        if (customer) {
+          setAllCustomers(prev => {
+            if (prev.some(c => c.id === customer.id)) return prev;
+            return [...prev, customer];
+          });
+        }
       } else if (type === 'conversation:updated') {
         const { conversation } = payload;
         setConversations(prev => prev.map(c => c.id === conversation.id ? conversation : c));
@@ -269,9 +314,21 @@ export default function App() {
           }
           return current;
         });
+      } else if (type === 'agent:status_change') {
+        const { userId, status } = payload;
+        setAllAgents(prev => prev.map(ag => ag.id === userId ? { ...ag, status } : ag));
+        setActiveAgent(current => {
+          if (current && current.id === userId) {
+            return { ...current, status };
+          }
+          return current;
+        });
       } else if (type === 'conversations:cleared_offline') {
-        const { ids } = payload;
+        const { ids, deletedCustomerIds } = payload;
         setConversations(prev => prev.filter(c => !ids.includes(c.id)));
+        if (deletedCustomerIds) {
+          setAllCustomers(prev => prev.filter(c => !deletedCustomerIds.includes(c.id)));
+        }
         setSelectedConversation(current => {
           if (current && ids.includes(current.id)) {
             return null;
@@ -312,8 +369,8 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = (content: string) => {
-    if (!selectedConversation || !socketRef.current || !activeAgent) return;
+  const handleSendMessage = async (content: string) => {
+    if (!selectedConversation || !activeAgent) return;
 
     const newMsg: Message = {
       id: `msg_${Date.now()}`,
@@ -326,10 +383,37 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    socketRef.current.send(JSON.stringify({
-      type: 'message:send',
-      message: newMsg
-    }));
+    // Optimistic Update: instantly add to UI message feed
+    setMessages(prev => {
+      if (prev.some(m => m.id === newMsg.id)) return prev;
+      return [...prev, newMsg];
+    });
+
+    // Attempt WebSocket transmission if connected
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      try {
+        socketRef.current.send(JSON.stringify({
+          type: 'message:send',
+          message: newMsg
+        }));
+      } catch (err) {
+        console.error('Failed to send message via WebSocket:', err);
+      }
+    }
+
+    // Always persist to database via reliable REST fallback
+    try {
+      await fetch(`/api/conversations/${selectedConversation.id}/messages`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
+        body: JSON.stringify(newMsg)
+      });
+    } catch (err) {
+      console.error('Failed to persist sent message via REST:', err);
+    }
   };
 
   const handleUpdateConversation = async (id: string, updates: Partial<Conversation>) => {
@@ -407,7 +491,11 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         const deletedIds = data.ids || [];
+        const deletedCustomerIds = data.deletedCustomerIds || [];
+        
         setConversations(prev => prev.filter(c => !deletedIds.includes(c.id)));
+        setAllCustomers(prev => prev.filter(c => !deletedCustomerIds.includes(c.id)));
+        
         setSelectedConversation(current => {
           if (current && deletedIds.includes(current.id)) {
             return null;
@@ -418,6 +506,35 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to clear offline conversations:', err);
+    }
+  };
+
+  const handleGenerateSimulatedVisitor = async () => {
+    try {
+      const res = await fetch('/api/conversations/simulate', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const { conversation, customer, messages: newMessages } = data;
+        
+        setConversations(prev => {
+          if (prev.some(c => c.id === conversation.id)) return prev;
+          return [conversation, ...prev];
+        });
+        setAllCustomers(prev => {
+          if (prev.some(c => c.id === customer.id)) return prev;
+          return [...prev, customer];
+        });
+        setSelectedConversation(conversation);
+        setMessages(newMessages);
+      }
+    } catch (err) {
+      console.error('Failed to generate simulated visitor:', err);
     }
   };
 
@@ -452,7 +569,7 @@ export default function App() {
     <div className="flex h-screen w-screen bg-zinc-50 font-sans select-none overflow-hidden text-zinc-800">
       
       {/* 1. Left-most Thin Sidebar (App Header & View Selectors) */}
-      <div className="w-16 bg-zinc-900 border-r border-zinc-800 flex flex-col justify-between items-center py-5 shrink-0">
+      <div id="tour-nav-container" className="w-16 bg-zinc-900 border-r border-zinc-800 flex flex-col justify-between items-center py-5 shrink-0">
         <div className="flex flex-col items-center space-y-6 w-full">
           {/* Logo */}
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-600/10">
@@ -471,6 +588,7 @@ export default function App() {
               return (
                 <button
                   key={tab.id}
+                  id={tab.id === 'kb' ? 'tour-nav-kb' : undefined}
                   onClick={() => setActiveTab(tab.id as any)}
                   className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all ${
                     activeTab === tab.id
@@ -483,14 +601,86 @@ export default function App() {
                 </button>
               );
             })}
+
+            {/* Guide/Tour button */}
+            <button
+              type="button"
+              onClick={() => setIsTourOpen(true)}
+              className="w-11 h-11 rounded-xl flex items-center justify-center text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 transition-all cursor-pointer border border-dashed border-zinc-800 hover:border-indigo-900/40"
+              title="Restart Interactive Tour"
+            >
+              <HelpCircle className="w-5 h-5 text-indigo-400 animate-pulse" />
+            </button>
           </div>
         </div>
 
         {/* Server Status Monitor & active Agent Roleplay switch & Logout */}
         <div className="flex flex-col items-center space-y-4 w-full px-2">
-          {/* Connection badge */}
-          <div className={`p-1.5 rounded-full ${isConnected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`} title={isConnected ? 'WS Link Active' : 'WS Link Off'}>
-            {isConnected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4 animate-pulse" />}
+          {/* Connection badge with Interactive Console Popover */}
+          <div className="relative" id="tour-connection-badge">
+            <button
+              type="button"
+              onClick={() => setIsConnectionPopoverOpen(!isConnectionPopoverOpen)}
+              className={`p-1.5 rounded-xl border transition-all cursor-pointer ${
+                isConnectionPopoverOpen
+                  ? 'bg-zinc-800 border-zinc-700 text-indigo-400'
+                  : isConnected
+                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
+                  : 'bg-rose-500/10 border-rose-500/20 text-rose-400 hover:bg-rose-500/20'
+              }`}
+              title="Click to view WebSocket Link & Simulation Panel"
+            >
+              {isConnected ? <Wifi className="w-4 h-4 animate-pulse" /> : <WifiOff className="w-4 h-4" />}
+            </button>
+
+            {/* Popover overlay */}
+            {isConnectionPopoverOpen && (
+              <>
+                <div 
+                  className="fixed inset-0 z-40 cursor-default" 
+                  onClick={() => setIsConnectionPopoverOpen(false)} 
+                />
+                <div className="absolute bottom-0 left-12 bg-white text-zinc-800 rounded-2xl shadow-2xl border border-zinc-200 p-4.5 w-64 z-50 animate-in fade-in slide-in-from-left-2 duration-150 cursor-default">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Connection Console</span>
+                    <button 
+                      onClick={() => setIsConnectionPopoverOpen(false)}
+                      className="text-zinc-400 hover:text-zinc-600 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center space-x-2 mb-3 bg-zinc-50 p-2 rounded-xl border border-zinc-100">
+                    <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                    <span className="text-[11px] font-bold text-zinc-700">
+                      WebSocket: {isConnected ? 'Synchronized' : 'Disconnected'}
+                    </span>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-500 leading-relaxed mb-3.5">
+                    {isConnected 
+                      ? 'WebSocket channel is active. Chat messages, typing status, and AI suggestions will synchronize instantly.'
+                      : 'WS Link is inactive. The app has seamlessly failed back to polling secure REST database endpoints.'}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsWsSimulatedOffline(!isWsSimulatedOffline);
+                    }}
+                    className={`w-full py-2 px-3 rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer border ${
+                      isWsSimulatedOffline
+                        ? 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600 shadow-sm'
+                        : 'bg-zinc-50 hover:bg-zinc-150 text-rose-600 border-zinc-200 hover:border-zinc-300'
+                    }`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${!isConnected && !isWsSimulatedOffline ? 'animate-spin' : ''}`} />
+                    <span>{isWsSimulatedOffline ? 'Restore Live Sync' : 'Simulate Outage'}</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Database Badge */}
@@ -543,25 +733,30 @@ export default function App() {
 
       {/* 2. Chat Conversation list (Visible only when tab is 'chat') */}
       {activeTab === 'chat' && (
-        <div className="w-[350px] border-r border-zinc-200 bg-white flex flex-col min-h-0 shrink-0">
+        <div id="tour-queue-section" className="w-[350px] border-r border-zinc-200 bg-white flex flex-col min-h-0 shrink-0">
           <div className="p-4 border-b border-zinc-200">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <h3 className="font-display font-semibold text-zinc-950 text-sm">Customer Support Queue</h3>
-                <p className="text-[10px] text-zinc-500 mt-0.5">Manage active real-time conversations</p>
+            <div className="flex flex-col space-y-3.5 mb-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-display font-semibold text-zinc-950 text-sm">Customer Support Queue</h3>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">Manage active real-time conversations</p>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={handleClearOfflineConversations}
-                className={`text-[9px] px-2 py-1.5 rounded-lg font-bold transition-all cursor-pointer border ${
-                  confirmClearOffline
-                    ? 'bg-rose-600 border-rose-600 text-white animate-pulse'
-                    : 'bg-zinc-50 hover:bg-rose-50 border-zinc-200 hover:border-rose-200 text-zinc-500 hover:text-rose-600'
-                }`}
-                title="Remove all offline mock / autonomous entries in bulk"
-              >
-                {confirmClearOffline ? 'Confirm Clear?' : 'Clear Offline'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleClearOfflineConversations}
+                  className={`w-full text-[10px] py-2 px-3.5 rounded-xl font-bold transition-all cursor-pointer border flex items-center justify-center gap-1.5 shadow-2xs ${
+                    confirmClearOffline
+                      ? 'bg-rose-600 border-rose-600 text-white animate-pulse'
+                      : 'bg-zinc-50 hover:bg-rose-50 border-zinc-200 hover:border-rose-200 text-zinc-500 hover:text-rose-600'
+                  }`}
+                  title="Bulk delete all simulated/offline guest visitors"
+                >
+                  <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>{confirmClearOffline ? 'Confirm Clear?' : 'Clear Offline Guest Visitors'}</span>
+                </button>
+              </div>
             </div>
 
             {/* Filter Toggle Segment */}
@@ -770,7 +965,7 @@ export default function App() {
         ) : activeTab === 'kb' ? (
           <KBManager orgId={currentUser.orgId} token={token} />
         ) : activeTab === 'analytics' ? (
-          <AnalyticsView orgId={currentUser.orgId} token={token} />
+          <AnalyticsView orgId={currentUser.orgId} token={token} allAgents={allAgents} />
         ) : (
           <SettingsView orgId={currentUser.orgId} token={token} />
         )}
@@ -785,6 +980,7 @@ export default function App() {
         />
       ) : (
         <button
+          id="tour-simulator-btn"
           onClick={() => setIsWidgetOpen(true)}
           className="fixed bottom-6 right-6 bg-zinc-950 hover:bg-zinc-900 text-white px-4 py-3 rounded-full shadow-2xl flex items-center space-x-2 border border-zinc-800 transition-all hover:scale-105 z-40 cursor-pointer"
         >
@@ -793,6 +989,14 @@ export default function App() {
           <ChevronRight className="w-4 h-4 text-zinc-400" />
         </button>
       )}
+
+      {/* 5. Interactive Workspace Onboarding Tour */}
+      <OnboardingTour
+        isOpen={isTourOpen}
+        onClose={() => setIsTourOpen(false)}
+        onNavigateToTab={(tabId) => setActiveTab(tabId)}
+        onOpenWidgetSimulator={() => setIsWidgetOpen(true)}
+      />
 
     </div>
   );

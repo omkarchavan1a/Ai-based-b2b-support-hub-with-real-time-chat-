@@ -1025,6 +1025,117 @@ async function startServer() {
     }
   });
 
+  // Post messages endpoint (Reliable fallback and database persistence)
+  app.post('/api/conversations/:id/messages', (req: any, res: any) => {
+    const authHeader = req.headers.authorization;
+    const db = getDb();
+    const conv = db.conversations.find(c => c.id === req.params.id);
+
+    if (!conv) {
+      return res.status(404).json({ error: 'Conversation not found.' });
+    }
+
+    // Verify access
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      const payload = verifyToken(token);
+      if (!payload) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid or expired token.' });
+      }
+      if (conv.orgId !== payload.orgId) {
+        return res.status(403).json({ error: 'Forbidden: You do not have access to this conversation.' });
+      }
+    } else {
+      const customerId = req.query.customerId;
+      if (!customerId) {
+        return res.status(401).json({ error: 'Unauthorized: Authentication token or customerId is required.' });
+      }
+      if (conv.customerId !== customerId) {
+        return res.status(403).json({ error: 'Forbidden: You do not have access to this conversation.' });
+      }
+    }
+
+    const msg = req.body;
+    const newMsg: Message = {
+      id: msg.id || `msg_${Date.now()}`,
+      conversationId: req.params.id,
+      senderType: msg.senderType,
+      senderId: msg.senderId,
+      senderName: msg.senderName,
+      content: msg.content,
+      readAt: msg.readAt || null,
+      createdAt: msg.createdAt || new Date().toISOString(),
+      senderAvatarUrl: msg.senderAvatarUrl
+    };
+
+    const saved = saveMessage(newMsg);
+
+    // Broadcast to agents in the same organization (isolate multi-tenancy)
+    const targetOrgId = conv.orgId;
+    agents.forEach(agent => {
+      if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === targetOrgId) {
+        agent.send(JSON.stringify({ type: 'message:new', message: saved }));
+      }
+    });
+
+    // Broadcast to customer (if agent is sending) or echo to customer (if customer is sending)
+    if (saved.senderType === 'agent') {
+      const custWs = customers.get(conv.customerId);
+      if (custWs && custWs.readyState === WebSocket.OPEN) {
+        custWs.send(JSON.stringify({ type: 'message:new', message: saved }));
+      }
+    } else {
+      const custWs = customers.get(saved.senderId);
+      if (custWs && custWs.readyState === WebSocket.OPEN) {
+        custWs.send(JSON.stringify({ type: 'message:new', message: saved }));
+      }
+
+      // TRIGGER AI COPILOT SUGGESTION FOR AGENTS (if conversation is not closed)
+      if (conv.status !== 'closed') {
+        // Notify agents in the same organization that AI is thinking
+        agents.forEach(agent => {
+          if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === targetOrgId) {
+            agent.send(JSON.stringify({ 
+              type: 'copilot:thinking', 
+              conversationId: conv.id 
+            }));
+          }
+        });
+
+        // Generate AI response in background
+        generateAISuggestion(conv.id, saved.content, conv.orgId).then(suggestion => {
+          const log: AISuggestionLog = {
+            id: `log_${Date.now()}`,
+            conversationId: conv.id,
+            suggestedText: suggestion,
+            wasUsed: false,
+            agentEdited: false,
+            createdAt: new Date().toISOString()
+          };
+          const currentDb = getDb();
+          currentDb.aiSuggestionsLogs.push(log);
+          saveDb(currentDb);
+
+          // Push suggestion to agents in the same organization
+          agents.forEach(agent => {
+            if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === targetOrgId) {
+              agent.send(JSON.stringify({
+                type: 'copilot:suggestion',
+                conversationId: conv.id,
+                suggestion,
+                logId: log.id
+              }));
+            }
+          });
+        }).catch(err => {
+          console.error('Error generating AI suggestion from REST POST route:', err);
+        });
+      }
+    }
+
+    res.json(saved);
+  });
+
   // Create a new conversation (Public endpoint for Customer Widget)
   app.post('/api/conversations', (req: any, res: any) => {
     const { orgId, customerId, channel, priority, tags, problemDescription } = req.body;
@@ -1151,17 +1262,236 @@ async function startServer() {
     // Clean up related messages
     db.messages = db.messages.filter(m => !deleteIds.includes(m.conversationId));
     
+    // Clean up associated custom/simulated customers (not in core preset list)
+    const presetCustomerIds = ['cust_alice', 'cust_bob', 'cust_charlie'];
+    const deleteCustomerIds = toDelete
+      .map(c => c.customerId)
+      .filter(id => !presetCustomerIds.includes(id));
+
+    db.customers = db.customers.filter(c => {
+      if (c.orgId !== orgId) return true;
+      return !deleteCustomerIds.includes(c.id);
+    });
+
     saveDb(db);
     
     // Notify agents via WS
-    const payload = JSON.stringify({ type: 'conversations:cleared_offline', ids: deleteIds });
+    const payload = JSON.stringify({ 
+      type: 'conversations:cleared_offline', 
+      ids: deleteIds,
+      deletedCustomerIds: deleteCustomerIds
+    });
     agents.forEach(agent => {
       if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === orgId) {
         agent.send(payload);
       }
     });
     
-    res.json({ success: true, count: deleteIds.length, ids: deleteIds });
+    res.json({ 
+      success: true, 
+      count: deleteIds.length, 
+      ids: deleteIds,
+      deletedCustomerIds: deleteCustomerIds
+    });
+  });
+
+  // Post route to generate a rich simulated guest/anonymous visitor conversation
+  app.post('/api/conversations/simulate', requireAuth, (req: any, res: any) => {
+    const db = getDb();
+    const orgId = req.orgId;
+
+    // Predefined simulated technical profiles of guest visitors
+    const SIMULATED_PROFILES = [
+      {
+        name: 'Grace Hopper',
+        email: 'grace@compiler-tech.io',
+        companyName: 'Compiler Tech',
+        avatarUrl: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&h=150&fit=crop&crop=faces',
+        phone: '+1 (202) 555-0143',
+        location: 'Washington, DC (IP: 108.162.21.7)',
+        browserInfo: 'Firefox Developer Edition 127.0 on macOS Sonoma',
+        notes: 'Pioneer of the Compiler project. Working on critical COBOL migration.',
+        problems: [
+          {
+            text: 'Hello, we are seeing random 502 Bad Gateway errors when uploading large binary files (around 45MB) to your `/api/v2/deploy` endpoint. Is there a payload limit or connection timeout on your load balancer?',
+            priority: 'high',
+            tags: ['api', 'network']
+          }
+        ]
+      },
+      {
+        name: 'Dennis Ritchie',
+        email: 'dennis@bell-labs.com',
+        companyName: 'Bell Labs',
+        avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=faces',
+        phone: '+1 (908) 555-0176',
+        location: 'Murray Hill, NJ (IP: 198.51.100.82)',
+        browserInfo: 'Safari 17.5 on macOS',
+        notes: 'Creator of the C language and Unix co-developer.',
+        problems: [
+          {
+            text: 'Hi there, we need to export our database schemas in Drizzle or standard SQL. Is there an automated tool in the Settings panel, or do we have to pull them via the REST admin API?',
+            priority: 'medium',
+            tags: ['database', 'export']
+          }
+        ]
+      },
+      {
+        name: 'Ada Lovelace',
+        email: 'ada@analytical-engine.org',
+        companyName: 'Analytical Engine',
+        avatarUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&h=150&fit=crop&crop=faces',
+        phone: '+1 (718) 555-0111',
+        location: 'London, UK (IP: 82.165.101.44)',
+        browserInfo: 'Chrome 126.0 on Windows 11',
+        notes: 'The world\'s first computer programmer.',
+        problems: [
+          {
+            text: 'URGENT: Our team SAML SSO login is failing for all users with "Signature verification failed". We updated our Okta certificate this morning. Where can we paste our new X.509 public certificate?',
+            priority: 'urgent',
+            tags: ['sso', 'security']
+          }
+        ]
+      },
+      {
+        name: 'Linus Torvalds',
+        email: 'torvalds@kernel.org',
+        companyName: 'Linux Kernel Corp',
+        avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&h=150&fit=crop&crop=faces',
+        phone: '+1 (503) 555-0129',
+        location: 'Portland, OR (IP: 50.116.32.9)',
+        browserInfo: 'Linux x86_64, Chromium 125.0',
+        notes: 'Incredibly direct, values rapid resolutions.',
+        problems: [
+          {
+            text: 'Can we configure multiple webhook destination URLs for the same event type? Right now, when a seat is assigned, we want to notify both our Slack bridge and our internal telemetry microservice.',
+            priority: 'low',
+            tags: ['webhooks', 'integration']
+          }
+        ]
+      },
+      {
+        name: 'Guido van Rossum',
+        email: 'guido@python.org',
+        companyName: 'Python Foundation',
+        avatarUrl: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&h=150&fit=crop&crop=faces',
+        phone: '+1 (408) 555-0158',
+        location: 'Silicon Valley, CA (IP: 172.56.33.20)',
+        browserInfo: 'Chrome 125.0 on macOS',
+        notes: 'BDFL of Python. Loves elegant indentation and simple scripts.',
+        problems: [
+          {
+            text: 'Hi support team, is there a rate-limiting policy on the search endpoint? We are getting sporadic 429 status codes during our high-concurrency CI/CD pipeline runs.',
+            priority: 'medium',
+            tags: ['api', 'limits']
+          }
+        ]
+      },
+      {
+        name: 'Margaret Hamilton',
+        email: 'margaret@apollo-guidance.gov',
+        companyName: 'NASA AGC',
+        avatarUrl: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=150&h=150&fit=crop&crop=faces',
+        phone: '+1 (617) 555-0182',
+        location: 'Boston, MA (IP: 18.9.22.1)',
+        browserInfo: 'Chrome 126.0 on macOS',
+        notes: 'Director of the Software Engineering Division for Apollo guidance computer.',
+        problems: [
+          {
+            text: 'Our analytics dashboard is showing a discrepancy between seat usage and the billing invoice total. It lists 14 active seats but we were charged for 18. Can someone audit our account records?',
+            priority: 'high',
+            tags: ['billing', 'audit']
+          }
+        ]
+      }
+    ];
+
+    // Pick a profile at random
+    const randomProfile = SIMULATED_PROFILES[Math.floor(Math.random() * SIMULATED_PROFILES.length)];
+    const randomProblem = randomProfile.problems[Math.floor(Math.random() * randomProfile.problems.length)];
+
+    // Create a unique simulated customer ID to avoid conflict but group recurring visits if wanted
+    const customerId = `cust_sim_${Date.now()}`;
+    const customer = {
+      id: customerId,
+      orgId,
+      name: randomProfile.name,
+      email: randomProfile.email,
+      companyName: randomProfile.companyName,
+      avatarUrl: randomProfile.avatarUrl,
+      createdAt: new Date().toISOString(),
+      phone: randomProfile.phone,
+      location: randomProfile.location,
+      browserInfo: randomProfile.browserInfo,
+      notes: randomProfile.notes
+    };
+
+    db.customers.push(customer);
+
+    const convId = `conv_sim_${Date.now()}`;
+    const newConv: Conversation = {
+      id: convId,
+      orgId,
+      customerId,
+      assignedAgentId: null,
+      status: 'open',
+      channel: 'widget',
+      priority: randomProblem.priority as 'low' | 'medium' | 'high' | 'urgent',
+      tags: randomProblem.tags,
+      createdAt: new Date().toISOString(),
+      lastMessageAt: new Date().toISOString(),
+      slaBreachTime: new Date(Date.now() + 120 * 60 * 1000).toISOString(),
+      problemDescription: randomProblem.text,
+      resolutionNotes: ''
+    };
+
+    db.conversations.push(newConv);
+
+    // Initial message from the customer
+    const userMsg: Message = {
+      id: `msg_sim_u_${Date.now()}`,
+      conversationId: convId,
+      senderType: 'customer',
+      senderId: customerId,
+      senderName: randomProfile.name,
+      content: randomProblem.text,
+      readAt: null,
+      createdAt: new Date().toISOString()
+    };
+    db.messages.push(userMsg);
+
+    // System automatic response message
+    const sysMsg: Message = {
+      id: `msg_sim_s_${Date.now() + 1}`,
+      conversationId: convId,
+      senderType: 'system',
+      senderId: 'system',
+      senderName: 'System Bot',
+      content: 'Thank you for reaching out! Your ticket has been received and added to our support queue. A support engineer will review and respond shortly.',
+      readAt: null,
+      createdAt: new Date(Date.now() + 10).toISOString()
+    };
+    db.messages.push(sysMsg);
+
+    saveDb(db);
+
+    // Notify agents via WS
+    const payload = JSON.stringify({
+      type: 'conversation:new',
+      conversation: {
+        ...newConv,
+        isCustomerOnline: false
+      },
+      customer
+    });
+
+    agents.forEach(agent => {
+      if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === orgId) {
+        agent.send(payload);
+      }
+    });
+
+    res.json({ success: true, conversation: newConv, customer, messages: [userMsg, sysMsg] });
   });
 
   // Delete conversation (Protected & Tenant Isolated)
@@ -1390,6 +1720,58 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Start background simulation for changing agent statuses from time to time
+  setInterval(() => {
+    try {
+      const db = getDb();
+      if (!db.users || db.users.length === 0) return;
+
+      // Collect userIds of active WebSocket connections to avoid changing their status
+      const activeUserIds = new Set<string>();
+      agents.forEach(a => {
+        if ((a as any).userId) activeUserIds.add((a as any).userId);
+      });
+
+      // Prefer changing status for agents who are not actively logged in
+      let candidateUsers = db.users.filter(u => !activeUserIds.has(u.id));
+      if (candidateUsers.length === 0) {
+        candidateUsers = db.users; // fallback to any user
+      }
+      if (candidateUsers.length === 0) return;
+
+      const selectedUser = candidateUsers[Math.floor(Math.random() * candidateUsers.length)];
+      const userIdx = db.users.findIndex(u => u.id === selectedUser.id);
+      if (userIdx === -1) return;
+
+      const statuses: ('online' | 'busy' | 'offline')[] = ['online', 'busy', 'offline'];
+      const currentStatus = db.users[userIdx].status || 'offline';
+      const possibleStatuses = statuses.filter(s => s !== currentStatus);
+      const newStatus = possibleStatuses[Math.floor(Math.random() * possibleStatuses.length)];
+
+      db.users[userIdx].status = newStatus;
+      saveDb(db);
+
+      console.log(`[Simulated Agent Presence] Toggle status of ${db.users[userIdx].name} (${db.users[userIdx].id}) from '${currentStatus}' to '${newStatus}'`);
+
+      // Broadcast to all connected agents in the same organization
+      const payload = JSON.stringify({
+        type: 'agent:status_change',
+        payload: {
+          userId: selectedUser.id,
+          status: newStatus
+        }
+      });
+
+      agents.forEach(client => {
+        if (client.readyState === WebSocket.OPEN && (client as any).orgId === selectedUser.orgId) {
+          client.send(payload);
+        }
+      });
+    } catch (err) {
+      console.error('Error in agent status simulation:', err);
+    }
+  }, 20000); // Trigger every 20 seconds
 
   // Bind server
   server.listen(PORT, '0.0.0.0', () => {

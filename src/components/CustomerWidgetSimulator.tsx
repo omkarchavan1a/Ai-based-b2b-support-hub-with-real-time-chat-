@@ -27,12 +27,12 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       };
     }
     return {
-      id: 'cust_alice',
+      id: 'cust_visitor',
       orgId,
-      name: 'Alice Smith',
-      companyName: 'Tesla Corp',
-      email: 'alice@tesla.com',
-      avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces',
+      name: 'Custom Visitor',
+      companyName: 'Acme Corp',
+      email: 'visitor@example.com',
+      avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop&crop=faces',
       createdAt: new Date().toISOString()
     };
   });
@@ -130,8 +130,8 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const handleSend = () => {
-    if (!inputMessage.trim() || !conversation || !socketRef.current) return;
+  const handleSend = async () => {
+    if (!inputMessage.trim() || !conversation) return;
 
     const newMsg: Message = {
       id: `msg_${Date.now()}`,
@@ -144,19 +144,41 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       createdAt: new Date().toISOString()
     };
 
-    // Stop typing immediately on send
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-      socketRef.current.send(JSON.stringify({ type: 'typing:stop' }));
+    // Optimistic Update: instantly add to customer's message feed
+    setMessages(prev => {
+      if (prev.some(m => m.id === newMsg.id)) return prev;
+      return [...prev, newMsg];
+    });
+
+    const textToSend = inputMessage;
+    setInputMessage('');
+
+    // Attempt WebSocket transmission if connected
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      try {
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+        socketRef.current.send(JSON.stringify({ type: 'typing:stop' }));
+        socketRef.current.send(JSON.stringify({
+          type: 'message:send',
+          message: newMsg
+        }));
+      } catch (err) {
+        console.error('Failed to send customer message via WebSocket:', err);
+      }
     }
 
-    // Send via WebSocket
-    socketRef.current.send(JSON.stringify({
-      type: 'message:send',
-      message: newMsg
-    }));
-
-    setInputMessage('');
+    // Always persist to database via reliable REST fallback
+    try {
+      await fetch(`/api/conversations/${conversation.id}/messages?customerId=${selectedCustomer.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMsg)
+      });
+    } catch (err) {
+      console.error('Failed to persist customer message via REST:', err);
+    }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -232,93 +254,50 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
         </div>
       )}
 
-      {/* Step 1: Select Simulated Persona */}
+      {/* Step 1: Customize Support Persona */}
       {!conversation && setupStep === 1 && (
         <div className="flex-1 flex flex-col min-h-0 bg-zinc-50 animate-in fade-in duration-150">
-          <div className="p-5 overflow-y-auto flex-1 space-y-4">
-            <div>
-              <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Simulated User Profile</label>
-              <div className="space-y-2">
-                {[
-                  ...(currentUser ? [{
-                    id: `cust_${currentUser.id}`,
-                    name: currentUser.name,
-                    companyName: 'My Workplace',
-                    email: currentUser.email,
-                    avatarUrl: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop&crop=faces'
-                  }] : []),
-                  {
-                    id: 'cust_alice',
-                    name: 'Alice Smith',
-                    companyName: 'Tesla Corp',
-                    email: 'alice@tesla.com',
-                    avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces'
-                  },
-                  {
-                    id: 'cust_bob',
-                    name: 'Bob Miller',
-                    companyName: 'Stripe Inc',
-                    email: 'bob@stripe.com',
-                    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&h=150&fit=crop&crop=faces'
-                  },
-                  {
-                    id: 'cust_charlie',
-                    name: 'Charlie Brown',
-                    companyName: 'Netflix',
-                    email: 'charlie@netflix.com',
-                    avatarUrl: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&h=150&fit=crop&crop=faces'
-                  }
-                ].map(c => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setSelectedCustomer(c as any)}
-                    className={`w-full flex items-center space-x-3.5 p-3 rounded-2xl border text-left transition-all ${
-                      selectedCustomer.id === c.id
-                        ? 'border-indigo-600 bg-indigo-50/50 shadow-sm'
-                        : 'border-zinc-200 hover:border-zinc-300 bg-white'
-                    }`}
-                  >
-                    <img src={c.avatarUrl} alt={c.name} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-bold text-zinc-900 truncate">{c.name}</p>
-                        {currentUser && c.id === `cust_${currentUser.id}` && (
-                          <span className="text-[8px] bg-indigo-600 text-white font-extrabold px-2 py-0.5 rounded-full uppercase scale-90">Logged In Agent</span>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-zinc-500 flex items-center truncate mt-0.5">
-                        <Building className="w-3.5 h-3.5 mr-1 text-zinc-400 shrink-0" /> {c.companyName}
-                      </p>
-                    </div>
-                  </button>
-                ))}
+          <div className="p-5 overflow-y-auto flex-1 space-y-5">
+            
+            {/* Header Description */}
+            <div className="bg-white border border-zinc-200 rounded-2xl p-4 shadow-2xs">
+              <div className="flex items-start space-x-3">
+                <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 shrink-0 mt-0.5">
+                  <User className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-zinc-900 text-xs">Define Customer Identity</h3>
+                  <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
+                    Set up a custom support persona. Any messages, support tickets, and live sessions will simulate this client identity in real-time.
+                  </p>
+                </div>
               </div>
             </div>
 
-            {/* Custom Editable Fields */}
-            <div className="pt-4 border-t border-zinc-200">
-              <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2.5">Customize Selected Profile</span>
-              <div className="bg-white border border-zinc-200 rounded-2xl p-4 space-y-3 shadow-xs">
+            {/* Editable Profile Information */}
+            <div className="space-y-4">
+              <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Profile Information</span>
+              <div className="bg-white border border-zinc-200 rounded-2xl p-4 space-y-3.5 shadow-2xs">
                 <div>
-                  <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Your Full Name</label>
+                  <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Full Name</label>
                   <input
                     type="text"
                     value={selectedCustomer.name}
                     onChange={(e) => setSelectedCustomer(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="Enter custom name"
-                    className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white"
+                    placeholder="e.g. Grace Hopper"
+                    className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white text-zinc-800"
                   />
                 </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Workplace / Corp</label>
+                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Company / Organization</label>
                     <input
                       type="text"
                       value={selectedCustomer.companyName || ''}
                       onChange={(e) => setSelectedCustomer(prev => ({ ...prev, companyName: e.target.value }))}
-                      placeholder="Company"
-                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white"
+                      placeholder="e.g. Compiler Tech"
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white text-zinc-800"
                     />
                   </div>
                   <div>
@@ -327,13 +306,47 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
                       type="email"
                       value={selectedCustomer.email}
                       onChange={(e) => setSelectedCustomer(prev => ({ ...prev, email: e.target.value }))}
-                      placeholder="Email"
-                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white"
+                      placeholder="e.g. grace@compiler-tech.io"
+                      className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white text-zinc-800"
                     />
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* Avatar Selector Presets */}
+            <div className="space-y-3">
+              <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Choose Avatar Preset</span>
+              <div className="flex items-center gap-3 bg-white border border-zinc-200 rounded-2xl p-4 shadow-2xs">
+                {[
+                  { label: 'Agent Persona', url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop&crop=faces' },
+                  { label: 'Creative Designer', url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces' },
+                  { label: 'Dev Lead', url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=faces' },
+                  { label: 'SaaS Director', url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&h=150&fit=crop&crop=faces' },
+                  { label: 'Security Lead', url: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&h=150&fit=crop&crop=faces' },
+                ].map((preset, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onClick={() => setSelectedCustomer(prev => ({ ...prev, avatarUrl: preset.url }))}
+                    className={`relative p-0.5 rounded-full border-2 transition-all hover:scale-105 cursor-pointer ${
+                      selectedCustomer.avatarUrl === preset.url 
+                        ? 'border-indigo-600 scale-110 shadow-sm' 
+                        : 'border-transparent opacity-75 hover:opacity-100'
+                    }`}
+                    title={preset.label}
+                  >
+                    <img src={preset.url} alt={preset.label} className="w-10 h-10 rounded-full object-cover" />
+                    {selectedCustomer.avatarUrl === preset.url && (
+                      <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-indigo-600 border border-white text-[8px] font-bold text-white rounded-full flex items-center justify-center">
+                        ✓
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
           </div>
 
           {/* Footer Navigation Step 1 */}

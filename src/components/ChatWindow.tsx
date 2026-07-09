@@ -575,7 +575,7 @@ export default function ChatWindow({
         </div>
 
         {/* Tabbed Right Panel (AI Copilot OR Customer CRM Profile) */}
-        <div className="w-80 bg-zinc-50 border-l border-zinc-200 flex flex-col min-h-0">
+        <div id="tour-copilot-section" className="w-80 bg-zinc-50 border-l border-zinc-200 flex flex-col min-h-0">
           {/* Header Tab Toggles */}
           <div className="flex border-b border-zinc-200 bg-white shrink-0">
             <button

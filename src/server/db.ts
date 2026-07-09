@@ -63,186 +63,9 @@ const DEFAULT_DB: Schema = {
       status: 'busy'
     }
   ],
-  customers: [
-    {
-      id: 'cust_alice',
-      orgId: 'org_stellar',
-      email: 'alice@tesla.com',
-      name: 'Alice Smith',
-      companyName: 'Tesla Corp',
-      avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces',
-      createdAt: new Date('2026-02-01T08:00:00Z').toISOString(),
-      phone: '+1 (510) 555-0192',
-      location: 'Palo Alto, CA (IP: 204.14.12.8)',
-      browserInfo: 'Chrome 125.0 on macOS Sonoma',
-      notes: 'Key stakeholder for the Tesla Integration pilot project. Frequently inquires about SAML SSO setup and webhooks SLA. Very technical customer.'
-    },
-    {
-      id: 'cust_bob',
-      orgId: 'org_stellar',
-      email: 'bob@stripe.com',
-      name: 'Bob Miller',
-      companyName: 'Stripe Inc',
-      avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&h=150&fit=crop&crop=faces',
-      createdAt: new Date('2026-02-05T09:30:00Z').toISOString(),
-      phone: '+1 (650) 412-3301',
-      location: 'San Francisco, CA (IP: 198.51.100.42)',
-      browserInfo: 'Safari 17.4 on iOS 17.4.1',
-      notes: 'Testing billing endpoints. Usually friendly but in a rush. Preferred communication channel is live widget chat.'
-    },
-    {
-      id: 'cust_charlie',
-      orgId: 'org_stellar',
-      email: 'charlie@netflix.com',
-      name: 'Charlie Brown',
-      companyName: 'Netflix',
-      avatarUrl: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&h=150&fit=crop&crop=faces',
-      createdAt: new Date('2026-02-10T11:15:00Z').toISOString(),
-      phone: '+1 (408) 555-0147',
-      location: 'Los Gatos, CA (IP: 172.56.21.99)',
-      browserInfo: 'Firefox 126.0 on Windows 11',
-      notes: 'Technical lead for Netflix payments API webhook configurations. High SLA priority.'
-    }
-  ],
-  conversations: [
-    {
-      id: 'conv_1',
-      orgId: 'org_stellar',
-      customerId: 'cust_alice',
-      assignedAgentId: 'usr_john',
-      status: 'open',
-      channel: 'widget',
-      priority: 'urgent',
-      tags: ['sso', 'saml', 'production'],
-      createdAt: new Date('2026-07-07T08:30:00Z').toISOString(),
-      lastMessageAt: new Date('2026-07-07T09:15:00Z').toISOString(),
-      slaBreachTime: new Date('2026-07-07T09:30:00Z').toISOString() // Urgent SLA is 1 hour
-    },
-    {
-      id: 'conv_2',
-      orgId: 'org_stellar',
-      customerId: 'cust_bob',
-      assignedAgentId: null,
-      status: 'open',
-      channel: 'widget',
-      priority: 'high',
-      tags: ['billing', 'invoice'],
-      createdAt: new Date('2026-07-07T09:00:00Z').toISOString(),
-      lastMessageAt: new Date('2026-07-07T09:05:00Z').toISOString(),
-      slaBreachTime: new Date('2026-07-07T11:00:00Z').toISOString() // High SLA is 2 hours
-    },
-    {
-      id: 'conv_3',
-      orgId: 'org_stellar',
-      customerId: 'cust_charlie',
-      assignedAgentId: 'usr_sarah',
-      status: 'closed',
-      channel: 'widget',
-      priority: 'medium',
-      tags: ['api', 'webhooks'],
-      createdAt: new Date('2026-07-06T14:00:00Z').toISOString(),
-      lastMessageAt: new Date('2026-07-06T15:20:00Z').toISOString(),
-      csatScore: 5,
-      summary: 'Customer wanted to know the webhook payload schema for payments. Agent provided documentation link and a sample payload. Customer verified it worked and closed the ticket.'
-    }
-  ],
-  messages: [
-    // Conversation 1: SAML SSO Error (Open)
-    {
-      id: 'msg_1_1',
-      conversationId: 'conv_1',
-      senderType: 'customer',
-      senderId: 'cust_alice',
-      senderName: 'Alice Smith',
-      content: 'Hello, we are attempting to go live with SAML SSO today but our users are getting "InResponseTo field does not match" errors. This is blocking our release.',
-      readAt: new Date('2026-07-07T08:31:00Z').toISOString(),
-      createdAt: new Date('2026-07-07T08:30:00Z').toISOString()
-    },
-    {
-      id: 'msg_1_2',
-      conversationId: 'conv_1',
-      senderType: 'agent',
-      senderId: 'usr_john',
-      senderName: 'John Doe',
-      content: 'Hi Alice! Let me look into that for you. That error typically occurs when the SSO token request expires or there is a server clock skew mismatch between our servers and your Identity Provider (IdP). Which IdP are you using?',
-      readAt: new Date('2026-07-07T08:36:00Z').toISOString(),
-      createdAt: new Date('2026-07-07T08:35:00Z').toISOString()
-    },
-    {
-      id: 'msg_1_3',
-      conversationId: 'conv_1',
-      senderType: 'customer',
-      senderId: 'cust_alice',
-      senderName: 'Alice Smith',
-      content: 'We are using Okta. I checked our IdP logs and it says the assertion is sent correctly. Can you verify if you accept clock skews up to 5 minutes?',
-      readAt: new Date('2026-07-07T09:16:00Z').toISOString(),
-      createdAt: new Date('2026-07-07T09:15:00Z').toISOString()
-    },
-
-    // Conversation 2: Billing issue (Open/Unassigned)
-    {
-      id: 'msg_2_1',
-      conversationId: 'conv_2',
-      senderType: 'customer',
-      senderId: 'cust_bob',
-      senderName: 'Bob Miller',
-      content: 'Hi, we received an invoice that contains charges for 12 unused seats. We deleted those users last month. Can we get this credited?',
-      readAt: null,
-      createdAt: new Date('2026-07-07T09:00:00Z').toISOString()
-    },
-    {
-      id: 'msg_2_2',
-      conversationId: 'conv_2',
-      senderType: 'system',
-      senderId: 'system',
-      senderName: 'System Bot',
-      content: 'Thank you for reaching out! Your ticket has been received and added to our billing queue. A support engineer will review and credit eligible unused seats shortly.',
-      readAt: null,
-      createdAt: new Date('2026-07-07T09:05:00Z').toISOString()
-    },
-
-    // Conversation 3: API webhook (Closed)
-    {
-      id: 'msg_3_1',
-      conversationId: 'conv_3',
-      senderType: 'customer',
-      senderId: 'cust_charlie',
-      senderName: 'Charlie Brown',
-      content: 'Where can I find the webhook payload JSON schema for the payment.succeeded event?',
-      readAt: new Date('2026-07-06T14:02:00Z').toISOString(),
-      createdAt: new Date('2026-07-06T14:00:00Z').toISOString()
-    },
-    {
-      id: 'msg_3_2',
-      conversationId: 'conv_3',
-      senderType: 'agent',
-      senderId: 'usr_sarah',
-      senderName: 'Sarah Connor',
-      content: 'Hi Charlie! You can access the complete JSON schema for all webhook events under Settings > Webhooks > Developer Specs in your dashboard. Here is a direct link: https://docs.stellarb2b.com/api/webhooks',
-      readAt: new Date('2026-07-06T14:12:00Z').toISOString(),
-      createdAt: new Date('2026-07-06T14:10:00Z').toISOString()
-    },
-    {
-      id: 'msg_3_3',
-      conversationId: 'conv_3',
-      senderType: 'customer',
-      senderId: 'cust_charlie',
-      senderName: 'Charlie Brown',
-      content: 'Awesome, that is exactly what I was looking for. Perfect response. I will close this ticket now.',
-      readAt: new Date('2026-07-06T15:20:00Z').toISOString(),
-      createdAt: new Date('2026-07-06T15:18:00Z').toISOString()
-    },
-    {
-      id: 'msg_3_4',
-      conversationId: 'conv_3',
-      senderType: 'system',
-      senderId: 'system',
-      senderName: 'System Bot',
-      content: 'This conversation was marked as closed. Rate your support experience below.',
-      readAt: new Date('2026-07-06T15:21:00Z').toISOString(),
-      createdAt: new Date('2026-07-06T15:20:00Z').toISOString()
-    }
-  ],
+  customers: [],
+  conversations: [],
+  messages: [],
   kbArticles: [
     {
       id: 'kb_1',
@@ -316,6 +139,12 @@ export async function initPgDb() {
     await initPgSchema(getDbLocal);
     // Fetch and populate the in-memory cache
     pgCache = await pgGetDb();
+    if (pgCache) {
+      pgCache.customers = [];
+      pgCache.conversations = [];
+      pgCache.messages = [];
+      await pgSaveDb(pgCache);
+    }
     console.log('PostgreSQL connected and cached successfully.');
   } catch (err) {
     console.error('Failed to initialize PostgreSQL Cache, falling back to local database:', err);
@@ -363,13 +192,23 @@ function getDbLocal(): Schema {
   }
 }
 
+let hasCleanedOnStartup = false;
+
 // Initialize DB file
 export function initDb() {
   if (isPgActive()) {
     // If PG is active, initialization is handled in initPgDb asynchronously at startup.
     return;
   }
-  getDbLocal();
+  const db = getDbLocal();
+  if (!hasCleanedOnStartup) {
+    db.customers = [];
+    db.conversations = [];
+    db.messages = [];
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    hasCleanedOnStartup = true;
+    console.log('Database visitor and conversation data cleared for clean startup as requested.');
+  }
 }
 
 export function getDb(): Schema {
