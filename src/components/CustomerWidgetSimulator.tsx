@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, X, MessageSquare, Star, Sparkles, Building, User, AlertCircle } from 'lucide-react';
+import { Send, X, MessageSquare, Star, Sparkles, Building, User, AlertCircle, RotateCcw } from 'lucide-react';
 import { Message, Customer, Conversation } from '../types';
 
 interface CustomerWidgetSimulatorProps {
@@ -66,8 +66,17 @@ const ANONYMOUS_PROFILES = [
 
 export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }: CustomerWidgetSimulatorProps) {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer>(() => {
+    const savedCustomer = localStorage.getItem('simulated_selected_customer');
+    if (savedCustomer) {
+      try {
+        return JSON.parse(savedCustomer);
+      } catch (e) {
+        // ignore and fallback
+      }
+    }
+
     if (currentUser) {
-      return {
+      const defaultAgentCust = {
         id: `cust_${currentUser.id}`,
         orgId,
         name: currentUser.name,
@@ -76,14 +85,16 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
         avatarUrl: currentUser.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop&crop=faces',
         createdAt: new Date().toISOString()
       };
+      localStorage.setItem('simulated_selected_customer', JSON.stringify(defaultAgentCust));
+      return defaultAgentCust;
     }
     
     // Pick a random predefined developer profile for the anonymous visitor
     const randomIndex = Math.floor(Math.random() * ANONYMOUS_PROFILES.length);
     const randomProfile = ANONYMOUS_PROFILES[randomIndex];
 
-    return {
-      id: 'cust_visitor',
+    const randomCust = {
+      id: `cust_visitor_${Math.floor(100000 + Math.random() * 900000)}`,
       orgId,
       name: randomProfile.name,
       companyName: randomProfile.companyName,
@@ -91,6 +102,8 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       avatarUrl: randomProfile.avatarUrl,
       createdAt: new Date().toISOString()
     };
+    localStorage.setItem('simulated_selected_customer', JSON.stringify(randomCust));
+    return randomCust;
   });
 
   const randomizePersona = () => {
@@ -98,6 +111,7 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     const randomProfile = ANONYMOUS_PROFILES[randomIndex];
     setSelectedCustomer(prev => ({
       ...prev,
+      id: `cust_visitor_${Math.floor(100000 + Math.random() * 900000)}`,
       name: randomProfile.name,
       companyName: randomProfile.companyName,
       email: randomProfile.email,
@@ -106,24 +120,91 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
   };
 
   const [inputMessage, setInputMessage] = useState('');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const saved = localStorage.getItem('simulated_messages');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  });
+  const [conversation, setConversation] = useState<Conversation | null>(() => {
+    const saved = localStorage.getItem('simulated_conversation');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  });
   const [isTyping, setIsTyping] = useState(false);
-  const [csatRating, setCsatRating] = useState<number | null>(null);
+  const [csatRating, setCsatRating] = useState<number | null>(() => {
+    const saved = localStorage.getItem('simulated_csat_rating');
+    return saved ? parseInt(saved, 10) : null;
+  });
   const [isConnecting, setIsConnecting] = useState(false);
   const [problemDescription, setProblemDescription] = useState('');
   const [ticketPriority, setTicketPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
-  const [setupStep, setSetupStep] = useState<1 | 2>(1);
+  const [setupStep, setSetupStep] = useState<1 | 2>(() => {
+    const saved = localStorage.getItem('simulated_setup_step');
+    return saved ? (parseInt(saved, 10) as 1 | 2) : 1;
+  });
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isFirstRenderRef = useRef(true);
 
-  // Load active or recent conversations for this customer
+  // Sync state to LocalStorage
   useEffect(() => {
+    if (selectedCustomer) {
+      localStorage.setItem('simulated_selected_customer', JSON.stringify(selectedCustomer));
+    }
+  }, [selectedCustomer]);
+
+  useEffect(() => {
+    if (conversation) {
+      localStorage.setItem('simulated_conversation', JSON.stringify(conversation));
+    } else {
+      localStorage.removeItem('simulated_conversation');
+    }
+  }, [conversation]);
+
+  useEffect(() => {
+    if (messages && messages.length > 0) {
+      localStorage.setItem('simulated_messages', JSON.stringify(messages));
+    } else {
+      localStorage.removeItem('simulated_messages');
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    localStorage.setItem('simulated_setup_step', setupStep.toString());
+  }, [setupStep]);
+
+  useEffect(() => {
+    if (csatRating !== null) {
+      localStorage.setItem('simulated_csat_rating', csatRating.toString());
+    } else {
+      localStorage.removeItem('simulated_csat_rating');
+    }
+  }, [csatRating]);
+
+  // Load active or recent conversations for this customer ONLY when changed after first mount
+  useEffect(() => {
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      return;
+    }
     if (socketRef.current) {
       socketRef.current.close();
+      socketRef.current = null;
     }
     setMessages([]);
     setConversation(null);
@@ -132,7 +213,124 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     setProblemDescription('');
     setTicketPriority('medium');
     setError(null);
+
+    localStorage.removeItem('simulated_conversation');
+    localStorage.removeItem('simulated_messages');
+    localStorage.removeItem('simulated_csat_rating');
   }, [selectedCustomer]);
+
+  const connectWebSocket = (conv: Conversation) => {
+    if (socketRef.current) {
+      socketRef.current.close();
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws?role=customer&customerId=${selectedCustomer.id}&conversationId=${conv.id}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      const payload = JSON.parse(event.data);
+      if (payload.type === 'message:new' && payload.message.conversationId === conv.id) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === payload.message.id)) return prev;
+          return [...prev, payload.message];
+        });
+      } else if (payload.type === 'typing:start' && payload.senderType === 'agent') {
+        setIsTyping(true);
+      } else if (payload.type === 'typing:stop' && payload.senderType === 'agent') {
+        setIsTyping(false);
+      } else if (payload.type === 'conversation:updated' && payload.conversation.id === conv.id) {
+        setConversation(payload.conversation);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket connection error:', err);
+      setError('Real-time connection interrupted. Some updates may fail to load.');
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket closed for visitor widget simulator');
+    };
+
+    socketRef.current = ws;
+  };
+
+  // Sync conversation and connect ws on mount if there is a restored session
+  useEffect(() => {
+    if (conversation) {
+      // Refresh messages
+      fetch(`/api/conversations/${conversation.id}/messages?customerId=${selectedCustomer.id}`)
+        .then(res => {
+          if (res.ok) return res.json();
+        })
+        .then(hist => {
+          if (Array.isArray(hist)) {
+            setMessages(hist);
+          }
+        })
+        .catch(err => console.error('Error fetching restored messages:', err));
+
+      // Refresh conversation details
+      fetch(`/api/conversations/${conversation.id}`)
+        .then(res => {
+          if (res.ok) return res.json();
+        })
+        .then(details => {
+          if (details) {
+            setConversation(details);
+          }
+        })
+        .catch(err => console.error('Error fetching restored conversation:', err));
+
+      connectWebSocket(conversation);
+    }
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+    };
+  }, []);
+
+  const resetSession = () => {
+    localStorage.removeItem('simulated_selected_customer');
+    localStorage.removeItem('simulated_conversation');
+    localStorage.removeItem('simulated_messages');
+    localStorage.removeItem('simulated_csat_rating');
+    localStorage.removeItem('simulated_setup_step');
+
+    if (socketRef.current) {
+      socketRef.current.close();
+      socketRef.current = null;
+    }
+
+    setMessages([]);
+    setConversation(null);
+    setCsatRating(null);
+    setIsTyping(false);
+    setProblemDescription('');
+    setTicketPriority('medium');
+    setSetupStep(1);
+    setError(null);
+
+    // Pick a new random visitor profile
+    const randomIndex = Math.floor(Math.random() * ANONYMOUS_PROFILES.length);
+    const randomProfile = ANONYMOUS_PROFILES[randomIndex];
+
+    const randomCust = {
+      id: `cust_visitor_${Math.floor(100000 + Math.random() * 900000)}`,
+      orgId,
+      name: randomProfile.name,
+      companyName: randomProfile.companyName,
+      email: randomProfile.email,
+      avatarUrl: randomProfile.avatarUrl,
+      createdAt: new Date().toISOString()
+    };
+    setSelectedCustomer(randomCust);
+    localStorage.setItem('simulated_selected_customer', JSON.stringify(randomCust));
+  };
 
   // Connect customer to WebSocket
   const startChat = async () => {
@@ -172,37 +370,7 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       }
 
       // 3. Establish WebSocket connection
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws?role=customer&customerId=${selectedCustomer.id}&conversationId=${conv.id}`;
-      const ws = new WebSocket(wsUrl);
-
-      ws.onmessage = (event) => {
-        const payload = JSON.parse(event.data);
-        if (payload.type === 'message:new' && payload.message.conversationId === conv.id) {
-          setMessages(prev => {
-            // Guard against duplicates
-            if (prev.some(m => m.id === payload.message.id)) return prev;
-            return [...prev, payload.message];
-          });
-        } else if (payload.type === 'typing:start' && payload.senderType === 'agent') {
-          setIsTyping(true);
-        } else if (payload.type === 'typing:stop' && payload.senderType === 'agent') {
-          setIsTyping(false);
-        } else if (payload.type === 'conversation:updated' && payload.conversation.id === conv.id) {
-          setConversation(payload.conversation);
-        }
-      };
-
-      ws.onerror = (err) => {
-        console.error('WebSocket connection error:', err);
-        setError('Real-time connection interrupted. Some updates may fail to load.');
-      };
-
-      ws.onclose = () => {
-        console.log('WebSocket closed for visitor widget simulator');
-      };
-
-      socketRef.current = ws;
+      connectWebSocket(conv);
     } catch (err: any) {
       console.error('Failed to start simulator chat:', err);
       setError(err?.message || 'Failed to start simulator chat. Please check connection and try again.');
@@ -311,9 +479,19 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
           <MessageSquare className="w-5 h-5 text-indigo-400" />
           <span className="font-display font-semibold text-sm tracking-wide">Live Customer Widget Simulator</span>
         </div>
-        <button onClick={onClose} className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors cursor-pointer">
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center space-x-1">
+          <button 
+            type="button"
+            onClick={resetSession} 
+            title="Reset simulation session and start fresh"
+            className="p-1.5 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors cursor-pointer"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={onClose} className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors cursor-pointer">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Step Indicator when configuring ticket */}
@@ -656,13 +834,22 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
                     ))}
                   </div>
                 ) : (
-                  <div className="flex items-center justify-center mt-2 space-x-1">
-                    <span className="text-xs font-medium text-emerald-700">Thank you for rating:</span>
-                    <div className="flex">
-                      {Array.from({ length: csatRating }).map((_, i) => (
-                        <Star key={i} className="w-4 h-4 text-amber-400 fill-amber-400" />
-                      ))}
+                  <div className="space-y-3 mt-2">
+                    <div className="flex items-center justify-center space-x-1">
+                      <span className="text-xs font-medium text-emerald-700">Thank you for rating:</span>
+                      <div className="flex">
+                        {Array.from({ length: csatRating }).map((_, i) => (
+                          <Star key={i} className="w-4 h-4 text-amber-400 fill-amber-400" />
+                        ))}
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={resetSession}
+                      className="mt-2 w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+                    >
+                      Start New Support Session
+                    </button>
                   </div>
                 )}
               </div>

@@ -179,11 +179,21 @@ async function getAIEmbedding(provider: string, apiKey: string, text: string): P
     if (provider === 'gemini') {
       const ai = getGemini(apiKey);
       if (!ai) return null;
-      const res: any = await ai.models.embedContent({
-        model: 'gemini-embedding-2-preview',
-        contents: text
-      });
-      return res.embedding?.values || null;
+      const embeddingModels = ['gemini-embedding-2-preview', 'text-embedding-004'];
+      for (const modelName of embeddingModels) {
+        try {
+          const res: any = await ai.models.embedContent({
+            model: modelName,
+            contents: text
+          });
+          if (res?.embedding?.values) {
+            return res.embedding.values;
+          }
+        } catch (err) {
+          console.error(`Gemini embedding model ${modelName} failed:`, err);
+        }
+      }
+      return null;
     }
 
     if (provider === 'openai') {
@@ -279,16 +289,18 @@ async function generateGenericAISuggestion(provider: string, apiKey: string, pro
   if (provider === 'gemini') {
     const ai = getGemini(apiKey);
     if (!ai) throw new Error('Gemini API key is invalid or not provided');
-    const modelsToTry = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
     for (const modelName of modelsToTry) {
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
+          console.log(`Trying Gemini model: ${modelName} (attempt ${attempt}/2)...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents: prompt,
             config: { temperature: 0.2 }
           });
           if (response && response.text) {
+            console.log(`Success with Gemini model: ${modelName}`);
             return response.text;
           }
         } catch (err: any) {
