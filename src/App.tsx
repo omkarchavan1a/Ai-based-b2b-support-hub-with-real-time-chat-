@@ -282,7 +282,10 @@ export default function App() {
         });
         if (customer) {
           setAllCustomers(prev => {
-            if (prev.some(c => c.id === customer.id)) return prev;
+            const index = prev.findIndex(c => c.id === customer.id);
+            if (index !== -1) {
+              return prev.map(c => c.id === customer.id ? customer : c);
+            }
             return [...prev, customer];
           });
         }
@@ -841,6 +844,12 @@ export default function App() {
                     <p className="text-[10px] font-semibold text-zinc-400 mt-0.5 truncate flex items-center">
                       {cust?.companyName || 'Web Widget'}
                     </p>
+
+                    {c.problemDescription && (
+                      <p className="text-[10px] text-zinc-600 mt-1.5 line-clamp-1 italic bg-zinc-100/50 px-2 py-1 rounded-md" title={c.problemDescription}>
+                        Query: {c.problemDescription}
+                      </p>
+                    )}
 
                     {/* Status Badge */}
                     <div className="mt-2.5 flex items-center justify-between text-[9px] text-zinc-400">

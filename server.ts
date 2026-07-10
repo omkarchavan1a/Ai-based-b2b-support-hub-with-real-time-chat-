@@ -1188,7 +1188,7 @@ async function startServer() {
 
     agents.forEach(agent => {
       if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === finalOrgId) {
-        agent.send(JSON.stringify({ type: 'conversation:new', conversation: newConv }));
+        agent.send(JSON.stringify({ type: 'conversation:new', conversation: newConv, customer }));
       }
     });
 
