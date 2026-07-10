@@ -64,6 +64,32 @@ function getOrgGeminiKey(orgId: string): string | undefined {
   return undefined;
 }
 
+// Helper to detect AI provider based on name or key format
+function detectAIProvider(providerName: string, apiKey: string): string | undefined {
+  const name = providerName.toLowerCase();
+  const key = apiKey.trim();
+
+  // 1. Name-based detection
+  if (name.includes('gemini') || name.includes('google')) return 'gemini';
+  if (name.includes('openai') || name.includes('gpt') || name.includes('chatgpt')) return 'openai';
+  if (name.includes('anthropic') || name.includes('claude')) return 'anthropic';
+  if (name.includes('deepseek')) return 'deepseek';
+  if (name.includes('openrouter')) return 'openrouter';
+  if (name.includes('groq')) return 'groq';
+  if (name.includes('cohere')) return 'cohere';
+
+  // 2. Format-based detection (fallback)
+  if (key.startsWith('AIzaSy')) return 'gemini';
+  if (key.startsWith('sk-ant-')) return 'anthropic';
+  if (key.startsWith('sk-proj-') || key.startsWith('sk-')) {
+    if (name.includes('deep')) return 'deepseek';
+    if (name.includes('clau') || name.includes('ant')) return 'anthropic';
+    return 'openai';
+  }
+
+  return undefined;
+}
+
 // Get any custom active AI provider key registered for an organization
 function getOrgActiveAIKey(orgId: string): { provider: string; key: string } | undefined {
   try {
@@ -72,36 +98,12 @@ function getOrgActiveAIKey(orgId: string): { provider: string; key: string } | u
     if (settings && settings.apiKeys) {
       const aiKeyObj = settings.apiKeys.find(k => {
         if (k.status !== 'active' || !k.apiKey || k.apiKey.trim() === '') return false;
-        const name = k.providerName.toLowerCase();
-        return name.includes('gemini') || 
-               name.includes('google') || 
-               name.includes('openai') || 
-               name.includes('gpt') || 
-               name.includes('chatgpt') || 
-               name.includes('anthropic') || 
-               name.includes('claude') || 
-               name.includes('deepseek') || 
-               name.includes('openrouter') || 
-               name.includes('groq') || 
-               name.includes('cohere');
+        const provider = detectAIProvider(k.providerName, k.apiKey);
+        return provider !== undefined;
       });
       
       if (aiKeyObj) {
-        let provider = 'gemini';
-        const name = aiKeyObj.providerName.toLowerCase();
-        if (name.includes('openai') || name.includes('gpt') || name.includes('chatgpt')) {
-          provider = 'openai';
-        } else if (name.includes('anthropic') || name.includes('claude')) {
-          provider = 'anthropic';
-        } else if (name.includes('deepseek')) {
-          provider = 'deepseek';
-        } else if (name.includes('openrouter')) {
-          provider = 'openrouter';
-        } else if (name.includes('groq')) {
-          provider = 'groq';
-        } else if (name.includes('cohere')) {
-          provider = 'cohere';
-        }
+        const provider = detectAIProvider(aiKeyObj.providerName, aiKeyObj.apiKey)!;
         return { provider, key: aiKeyObj.apiKey.trim() };
       }
     }

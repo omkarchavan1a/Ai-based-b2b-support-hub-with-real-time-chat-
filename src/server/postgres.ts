@@ -120,7 +120,8 @@ const DDL_STATEMENTS = [
     org_id VARCHAR(255) PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
     sla_config TEXT,
     business_hours TEXT,
-    routing_rule VARCHAR(100)
+    routing_rule VARCHAR(100),
+    api_keys TEXT
   )`
 ];
 
@@ -134,6 +135,10 @@ export async function initPgSchema(localDbGetter: () => any) {
     for (const statement of DDL_STATEMENTS) {
       await query(statement);
     }
+    
+    // Ensure api_keys column exists on settings table for custom keys in case of an existing table
+    await query('ALTER TABLE settings ADD COLUMN IF NOT EXISTS api_keys TEXT');
+    
     console.log('PostgreSQL tables checked/created successfully.');
     
     // Seed with existing JSON DB if PG is empty
@@ -213,9 +218,9 @@ export async function initPgSchema(localDbGetter: () => any) {
       // Migrate Settings
       for (const set of localData.settings || []) {
         await query(
-          `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule) 
-           VALUES ($1, $2, $3, $4) ON CONFLICT (org_id) DO NOTHING`,
-          [set.orgId, JSON.stringify(set.slaConfig), JSON.stringify(set.businessHours), set.routingRule]
+          `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule, api_keys) 
+           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (org_id) DO NOTHING`,
+          [set.orgId, JSON.stringify(set.slaConfig), JSON.stringify(set.businessHours), set.routingRule, JSON.stringify(set.apiKeys || [])]
         );
       }
       
@@ -274,7 +279,8 @@ export async function pgGetDb(): Promise<any> {
     })),
     settings: sets.rows.map(s => ({
       orgId: s.org_id, slaConfig: JSON.parse(s.sla_config || '{}'),
-      businessHours: JSON.parse(s.business_hours || '{}'), routingRule: s.routing_rule
+      businessHours: JSON.parse(s.business_hours || '{}'), routingRule: s.routing_rule,
+      apiKeys: JSON.parse(s.api_keys || '[]')
     }))
   };
 }
@@ -359,11 +365,12 @@ export async function pgSaveDb(schema: any) {
     
     for (const set of schema.settings || []) {
       await query(
-        `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule) 
-         VALUES ($1, $2, $3, $4) 
+        `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule, api_keys) 
+         VALUES ($1, $2, $3, $4, $5) 
          ON CONFLICT (org_id) DO UPDATE SET sla_config = EXCLUDED.sla_config, 
-         business_hours = EXCLUDED.business_hours, routing_rule = EXCLUDED.routing_rule`,
-        [set.orgId, JSON.stringify(set.slaConfig), JSON.stringify(set.businessHours), set.routingRule]
+         business_hours = EXCLUDED.business_hours, routing_rule = EXCLUDED.routing_rule,
+         api_keys = EXCLUDED.api_keys`,
+        [set.orgId, JSON.stringify(set.slaConfig), JSON.stringify(set.businessHours), set.routingRule, JSON.stringify(set.apiKeys || [])]
       );
     }
   } catch (err) {
@@ -489,12 +496,13 @@ export async function pgGetSettings(orgId: string): Promise<SupportSettings> {
       orgId,
       slaConfig: { low: 1440, medium: 480, high: 120, urgent: 60 },
       businessHours: { enabled: false, start: '09:00', end: '17:00', timezone: 'UTC' },
-      routingRule: 'round-robin'
+      routingRule: 'round-robin',
+      apiKeys: []
     };
     await query(
-      `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule) 
-       VALUES ($1, $2, $3, $4)`,
-      [orgId, JSON.stringify(defaultSettings.slaConfig), JSON.stringify(defaultSettings.businessHours), defaultSettings.routingRule]
+      `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule, api_keys) 
+       VALUES ($1, $2, $3, $4, $5)`,
+      [orgId, JSON.stringify(defaultSettings.slaConfig), JSON.stringify(defaultSettings.businessHours), defaultSettings.routingRule, JSON.stringify([])]
     );
     return defaultSettings;
   }
@@ -503,7 +511,8 @@ export async function pgGetSettings(orgId: string): Promise<SupportSettings> {
     orgId: s.org_id,
     slaConfig: JSON.parse(s.sla_config || '{}'),
     businessHours: JSON.parse(s.business_hours || '{}'),
-    routingRule: s.routing_rule
+    routingRule: s.routing_rule,
+    apiKeys: JSON.parse(s.api_keys || '[]')
   };
 }
 
@@ -511,11 +520,12 @@ export async function pgUpdateSettings(orgId: string, updates: Partial<SupportSe
   const current = await pgGetSettings(orgId);
   const merged = { ...current, ...updates };
   await query(
-    `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule) 
-     VALUES ($1, $2, $3, $4) 
+    `INSERT INTO settings (org_id, sla_config, business_hours, routing_rule, api_keys) 
+     VALUES ($1, $2, $3, $4, $5) 
      ON CONFLICT (org_id) DO UPDATE SET sla_config = EXCLUDED.sla_config, 
-     business_hours = EXCLUDED.business_hours, routing_rule = EXCLUDED.routing_rule`,
-    [orgId, JSON.stringify(merged.slaConfig), JSON.stringify(merged.businessHours), merged.routingRule]
+     business_hours = EXCLUDED.business_hours, routing_rule = EXCLUDED.routing_rule,
+     api_keys = EXCLUDED.api_keys`,
+    [orgId, JSON.stringify(merged.slaConfig), JSON.stringify(merged.businessHours), merged.routingRule, JSON.stringify(merged.apiKeys || [])]
   );
   return merged;
 }
