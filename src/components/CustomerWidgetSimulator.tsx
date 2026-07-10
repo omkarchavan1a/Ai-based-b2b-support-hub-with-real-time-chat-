@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, X, MessageSquare, Star, Sparkles, Building, User } from 'lucide-react';
+import { Send, X, MessageSquare, Star, Sparkles, Building, User, AlertCircle } from 'lucide-react';
 import { Message, Customer, Conversation } from '../types';
 
 interface CustomerWidgetSimulatorProps {
@@ -12,6 +12,57 @@ interface CustomerWidgetSimulatorProps {
   orgId: string;
   currentUser?: any;
 }
+
+const ANONYMOUS_PROFILES = [
+  {
+    name: 'Grace Hopper',
+    email: 'grace@compiler-tech.io',
+    companyName: 'Compiler Tech',
+    avatarUrl: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&h=150&fit=crop&crop=faces',
+  },
+  {
+    name: 'Dennis Ritchie',
+    email: 'dennis@bell-labs.com',
+    companyName: 'Bell Labs',
+    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=faces',
+  },
+  {
+    name: 'Ada Lovelace',
+    email: 'ada@analytical-engine.org',
+    companyName: 'Analytical Engine',
+    avatarUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&h=150&fit=crop&crop=faces',
+  },
+  {
+    name: 'Linus Torvalds',
+    email: 'torvalds@kernel.org',
+    companyName: 'Linux Kernel Corp',
+    avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&h=150&fit=crop&crop=faces',
+  },
+  {
+    name: 'Guido van Rossum',
+    email: 'guido@python.org',
+    companyName: 'Python Foundation',
+    avatarUrl: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&h=150&fit=crop&crop=faces',
+  },
+  {
+    name: 'Margaret Hamilton',
+    email: 'margaret@apollo-guidance.gov',
+    companyName: 'NASA AGC',
+    avatarUrl: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=150&h=150&fit=crop&crop=faces',
+  },
+  {
+    name: 'Alan Turing',
+    email: 'alan@bletchley-park.org.uk',
+    companyName: 'Bletchley Park',
+    avatarUrl: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&h=150&fit=crop&crop=faces',
+  },
+  {
+    name: 'Tim Berners-Lee',
+    email: 'timbl@w3.org',
+    companyName: 'W3C',
+    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&h=150&fit=crop&crop=faces',
+  }
+];
 
 export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }: CustomerWidgetSimulatorProps) {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer>(() => {
@@ -26,16 +77,33 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
         createdAt: new Date().toISOString()
       };
     }
+    
+    // Pick a random predefined developer profile for the anonymous visitor
+    const randomIndex = Math.floor(Math.random() * ANONYMOUS_PROFILES.length);
+    const randomProfile = ANONYMOUS_PROFILES[randomIndex];
+
     return {
       id: 'cust_visitor',
       orgId,
-      name: 'Custom Visitor',
-      companyName: 'Acme Corp',
-      email: 'visitor@example.com',
-      avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop&crop=faces',
+      name: randomProfile.name,
+      companyName: randomProfile.companyName,
+      email: randomProfile.email,
+      avatarUrl: randomProfile.avatarUrl,
       createdAt: new Date().toISOString()
     };
   });
+
+  const randomizePersona = () => {
+    const randomIndex = Math.floor(Math.random() * ANONYMOUS_PROFILES.length);
+    const randomProfile = ANONYMOUS_PROFILES[randomIndex];
+    setSelectedCustomer(prev => ({
+      ...prev,
+      name: randomProfile.name,
+      companyName: randomProfile.companyName,
+      email: randomProfile.email,
+      avatarUrl: randomProfile.avatarUrl,
+    }));
+  };
 
   const [inputMessage, setInputMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -46,6 +114,7 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
   const [problemDescription, setProblemDescription] = useState('');
   const [ticketPriority, setTicketPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
   const [setupStep, setSetupStep] = useState<1 | 2>(1);
+  const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -62,11 +131,13 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     setIsTyping(false);
     setProblemDescription('');
     setTicketPriority('medium');
+    setError(null);
   }, [selectedCustomer]);
 
   // Connect customer to WebSocket
   const startChat = async () => {
     setIsConnecting(true);
+    setError(null);
     try {
       // 1. Create conversation on backend via REST
       const res = await fetch('/api/conversations', {
@@ -85,6 +156,9 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
           problemDescription: problemDescription.trim()
         })
       });
+      if (!res.ok) {
+        throw new Error('Failed to register support request with server');
+      }
       const conv: Conversation = await res.json();
       setConversation(conv);
 
@@ -119,9 +193,19 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
         }
       };
 
+      ws.onerror = (err) => {
+        console.error('WebSocket connection error:', err);
+        setError('Real-time connection interrupted. Some updates may fail to load.');
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket closed for visitor widget simulator');
+      };
+
       socketRef.current = ws;
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to start simulator chat:', err);
+      setError(err?.message || 'Failed to start simulator chat. Please check connection and try again.');
     } finally {
       setIsConnecting(false);
     }
@@ -277,7 +361,17 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
 
             {/* Editable Profile Information */}
             <div className="space-y-4">
-              <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Profile Information</span>
+              <div className="flex items-center justify-between">
+                <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Profile Information</span>
+                <button
+                  type="button"
+                  onClick={randomizePersona}
+                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold flex items-center space-x-1 cursor-pointer bg-transparent border-none p-0 focus:outline-none"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Randomize Persona</span>
+                </button>
+              </div>
               <div className="bg-white border border-zinc-200 rounded-2xl p-4 space-y-3.5 shadow-2xs">
                 <div>
                   <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Full Name</label>
@@ -419,30 +513,38 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
               </div>
 
               {/* Step 2 Footer Navigation */}
-              <div className="p-4 bg-white border-t border-zinc-200 flex items-center justify-between shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSetupStep(1)}
-                  className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  ← Back to Profile
-                </button>
+              <div className="p-4 bg-white border-t border-zinc-200 flex flex-col shrink-0 gap-3">
+                {error && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-2.5 text-[11px] flex items-start space-x-1.5 animate-pulse">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setSetupStep(1)}
+                    className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    ← Back to Profile
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={startChat}
-                  disabled={isConnecting || !problemDescription.trim()}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm disabled:opacity-50 flex items-center space-x-2 cursor-pointer"
-                >
-                  {isConnecting ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
-                      <span>Connecting...</span>
-                    </>
-                  ) : (
-                    <span>Submit & Start Chat</span>
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    onClick={startChat}
+                    disabled={isConnecting || !problemDescription.trim()}
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm disabled:opacity-50 flex items-center space-x-2 cursor-pointer"
+                  >
+                    {isConnecting ? (
+                      <>
+                        <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                        <span>Connecting...</span>
+                      </>
+                    ) : (
+                      <span>Submit & Start Chat</span>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -460,6 +562,21 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
                 {conversation.status.toUpperCase()}
               </span>
             </div>
+
+            {error && (
+              <div className="bg-rose-50 border-b border-rose-200 text-rose-700 px-4 py-1.5 text-[10px] flex items-center justify-between">
+                <div className="flex items-center space-x-1.5">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <span>{error}</span>
+                </div>
+                <button 
+                  onClick={() => setError(null)} 
+                  className="text-rose-500 hover:text-rose-700 font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {/* Stated problem banner */}
             {conversation.problemDescription && (

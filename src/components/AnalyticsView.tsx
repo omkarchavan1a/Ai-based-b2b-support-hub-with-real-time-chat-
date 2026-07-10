@@ -30,6 +30,7 @@ interface AnalyticsViewProps {
 export default function AnalyticsView({ orgId, token, allAgents = [] }: AnalyticsViewProps) {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAnalytics();
@@ -37,6 +38,7 @@ export default function AnalyticsView({ orgId, token, allAgents = [] }: Analytic
 
   const fetchAnalytics = async () => {
     setIsLoading(true);
+    setError(null);
     try {
       const res = await fetch(`/api/analytics?orgId=${orgId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -44,20 +46,41 @@ export default function AnalyticsView({ orgId, token, allAgents = [] }: Analytic
       if (res.ok) {
         const stats = await res.json();
         setData(stats);
+      } else {
+        setError('Failed to fetch analytics from the server.');
       }
     } catch (err) {
       console.error('Failed to load analytics:', err);
+      setError('A network error occurred while compiling support statistics.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center bg-white">
         <div className="text-center">
           <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="text-xs text-zinc-500">Compiling support statistics...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-white p-6">
+        <div className="text-center max-w-sm">
+          <AlertCircle className="w-10 h-10 text-rose-500 mx-auto mb-4" />
+          <h3 className="text-sm font-bold text-zinc-900 mb-1">Failed to Load Dashboard</h3>
+          <p className="text-xs text-zinc-500 mb-4">{error || 'No analytics data available.'}</p>
+          <button
+            onClick={fetchAnalytics}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+          >
+            Retry Loading
+          </button>
         </div>
       </div>
     );

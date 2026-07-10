@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "OmniChannel Support Desk",
+  "description": "Full-stack real-time customer support ticketing system with live website chat widget simulator and AI copilot.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
