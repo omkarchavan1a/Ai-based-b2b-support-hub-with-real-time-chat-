@@ -78,6 +78,7 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
           customerName: selectedCustomer.name,
           customerEmail: selectedCustomer.email,
           companyName: selectedCustomer.companyName,
+          avatarUrl: selectedCustomer.avatarUrl,
           channel: 'widget',
           priority: ticketPriority,
           tags: ['web-widget'],

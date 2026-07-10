@@ -1152,6 +1152,7 @@ async function startServer() {
         name: req.body.customerName || 'Anonymous Visitor',
         email: req.body.customerEmail || 'anonymous@visitor.com',
         companyName: req.body.companyName || 'Web Widget',
+        avatarUrl: req.body.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop&crop=faces',
         createdAt: new Date().toISOString(),
         phone: req.body.customerPhone || '+1 (555) 010-0000',
         location: req.body.customerLocation || 'San Jose, CA (IP: 64.233.160.1)',
@@ -1159,6 +1160,11 @@ async function startServer() {
         notes: req.body.customerNotes || 'This user initiated chat via the simulated web widget.'
       };
       db.customers.push(customer);
+    } else {
+      if (req.body.customerName) customer.name = req.body.customerName;
+      if (req.body.customerEmail) customer.email = req.body.customerEmail;
+      if (req.body.companyName) customer.companyName = req.body.companyName;
+      if (req.body.avatarUrl) customer.avatarUrl = req.body.avatarUrl;
     }
 
     const newConv: Conversation = {
