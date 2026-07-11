@@ -109,6 +109,8 @@ export interface ProjectApiKey {
   description: string;
   status: 'active' | 'inactive';
   createdAt: string;
+  model?: string;
+  isEncrypted?: boolean;
 }
 
 export interface SupportSettings {

@@ -8,7 +8,7 @@ import {
   Send, Sparkles, Clock, AlertCircle, Building, User, Mail, 
   Tag, CheckCircle2, ChevronRight, ThumbsUp, ThumbsDown, Loader2,
   Phone, MapPin, Monitor, Calendar, FileText, Check, Edit2, 
-  MessageSquare, Star, ExternalLink, RefreshCw, Info, X
+  MessageSquare, Star, ExternalLink, RefreshCw, Info, X, Settings
 } from 'lucide-react';
 import { Message, Conversation, Customer, User as AgentType } from '../types';
 
@@ -67,6 +67,22 @@ export default function ChatWindow({
 
   // Active right side drawer tab ('ai' or 'profile')
   const [activeRightTab, setActiveRightTab] = useState<'ai' | 'profile'>('ai');
+
+  // AI key presence gating (PRD alignment)
+  const [hasAIKey, setHasAIKey] = useState<boolean>(true);
+
+  useEffect(() => {
+    const checkAIKey = async () => {
+      try {
+        const res = await fetch(`/api/health?orgId=${conversation.orgId}`);
+        const data = await res.json();
+        setHasAIKey(!!data.hasGeminiKey);
+      } catch (e) {
+        console.error('Failed to check AI key health:', e);
+      }
+    };
+    checkAIKey();
+  }, [conversation.orgId, conversation.id]);
 
   // Customer detailed edit state
   const [profileName, setProfileName] = useState('');
@@ -607,8 +623,35 @@ export default function ChatWindow({
             {activeRightTab === 'ai' ? (
               // --- TAB 1: AI Copilot ---
               <div className="flex-1 flex flex-col min-h-0">
-                <div className="flex-1 overflow-y-auto min-h-0 flex flex-col">
-                  {aiSuggestion?.isThinking ? (
+                <div className="flex-1 overflow-y-auto min-h-0 flex flex-col pb-4">
+                  {!hasAIKey ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-zinc-50/50 rounded-2xl border border-zinc-200/50 max-w-sm mx-auto my-auto space-y-4 animate-in fade-in duration-300">
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center">
+                        <Sparkles className="w-6 h-6 text-indigo-500 animate-pulse" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <h4 className="text-xs font-semibold text-zinc-900 font-display">AI Copilot Deactivated</h4>
+                        <p className="text-[10px] text-zinc-500 leading-relaxed">
+                          Your organization has not configured an active AI provider key (Gemini or OpenAI). Connect a verified key in Settings to unlock automated RAG drafts and live copilot recommendations.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const settingsTab = document.getElementById('tour-nav-settings');
+                          if (settingsTab) {
+                            settingsTab.click();
+                          } else {
+                            const navBtn = document.querySelector('[id*="settings"]') as HTMLButtonElement;
+                            if (navBtn) navBtn.click();
+                          }
+                        }}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-bold transition-all shadow-sm cursor-pointer flex items-center space-x-1"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                        <span>Configure API Key</span>
+                      </button>
+                    </div>
+                  ) : aiSuggestion?.isThinking ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-center text-zinc-400 py-10">
                       <Loader2 className="w-6 h-6 text-indigo-500 animate-spin mb-2" />
                       <p className="text-[11px]">RAG Knowledge Retrieval active...</p>
@@ -647,7 +690,7 @@ export default function ChatWindow({
                           placeholder="Review and edit suggested reply..."
                         />
                       </div>
-
+ 
                       <div className="space-y-2">
                         <button
                           onClick={handleSendSuggestion}

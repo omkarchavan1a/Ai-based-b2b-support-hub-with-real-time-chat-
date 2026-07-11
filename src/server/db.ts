@@ -40,7 +40,7 @@ const DEFAULT_DB: Schema = {
       orgId: 'org_stellar',
       role: 'owner',
       email: 'stellar-admin@b2bhub.ai',
-      name: 'Sarah Connor',
+      name: 'Workspace Owner',
       avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&h=150&fit=crop&crop=faces',
       status: 'online'
     },
@@ -49,7 +49,7 @@ const DEFAULT_DB: Schema = {
       orgId: 'org_stellar',
       role: 'agent',
       email: 'stellar-john@b2bhub.ai',
-      name: 'John Doe',
+      name: 'Support Specialist',
       avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop&crop=faces',
       status: 'online'
     },

@@ -250,7 +250,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Sarah Connor"
+                    placeholder="Enter your name"
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-11 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition-colors"
                   />
                 </div>

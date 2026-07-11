@@ -9,6 +9,7 @@ import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 
 import {
@@ -90,21 +91,82 @@ function detectAIProvider(providerName: string, apiKey: string): string | undefi
   return undefined;
 }
 
+// AES-256-GCM Encryption / Decryption Utilities
+const ENCRYPTION_KEY = process.env.VAULT_ENC_KEY || 'aistudio-custom-api-key-encryption-key-32chars!'; // Must be 32 bytes
+const IV_LENGTH = 12; // Standard GCM IV is 12 bytes
+
+function encrypt(text: string): string {
+  let key = ENCRYPTION_KEY;
+  if (key.length < 32) {
+    key = key.padEnd(32, '0');
+  } else if (key.length > 32) {
+    key = key.substring(0, 32);
+  }
+
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(key), iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag().toString('hex');
+
+  // Format: iv:encryptedText:authTag
+  return `${iv.toString('hex')}:${encrypted}:${authTag}`;
+}
+
+function decrypt(text: string): string {
+  const parts = text.split(':');
+  if (parts.length !== 3) {
+    throw new Error('Invalid encrypted text format');
+  }
+
+  let key = ENCRYPTION_KEY;
+  if (key.length < 32) {
+    key = key.padEnd(32, '0');
+  } else if (key.length > 32) {
+    key = key.substring(0, 32);
+  }
+
+  const iv = Buffer.from(parts[0], 'hex');
+  const encryptedText = parts[1]; // Keep as string (hex format)
+  const authTag = Buffer.from(parts[2], 'hex');
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key), iv);
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
 // Get any custom active AI provider key registered for an organization
-function getOrgActiveAIKey(orgId: string): { provider: string; key: string } | undefined {
+function getOrgActiveAIKey(orgId: string): { provider: string; key: string; model?: string } | undefined {
   try {
     const db = getDb();
     const settings = db.settings.find(s => s.orgId === orgId);
     if (settings && settings.apiKeys) {
       const aiKeyObj = settings.apiKeys.find(k => {
         if (k.status !== 'active' || !k.apiKey || k.apiKey.trim() === '') return false;
-        const provider = detectAIProvider(k.providerName, k.apiKey);
-        return provider !== undefined;
+        const nameLower = k.providerName.toLowerCase();
+        return nameLower.includes('gemini') || nameLower.includes('google') || nameLower.includes('openai') || nameLower.includes('anthropic') || nameLower.includes('deepseek');
       });
       
       if (aiKeyObj) {
-        const provider = detectAIProvider(aiKeyObj.providerName, aiKeyObj.apiKey)!;
-        return { provider, key: aiKeyObj.apiKey.trim() };
+        let decryptedKey = aiKeyObj.apiKey.trim();
+        if (aiKeyObj.isEncrypted) {
+          try {
+            decryptedKey = decrypt(decryptedKey);
+          } catch (decErr) {
+            console.error('Failed to decrypt custom key:', decErr);
+            return undefined;
+          }
+        }
+        
+        const nameLower = aiKeyObj.providerName.toLowerCase();
+        let provider = 'gemini';
+        if (nameLower.includes('openai')) provider = 'openai';
+        else if (nameLower.includes('anthropic')) provider = 'anthropic';
+        else if (nameLower.includes('deepseek')) provider = 'deepseek';
+        
+        return { provider, key: decryptedKey, model: aiKeyObj.model };
       }
     }
   } catch (err) {
@@ -228,11 +290,7 @@ async function getAIEmbedding(provider: string, apiKey: string, text: string): P
 async function getRelevantKBArticles(query: string, orgId: string): Promise<KBArticle[]> {
   const db = getDb();
   const articles = db.kbArticles.filter(a => a.orgId === orgId);
-  const activeAI = getOrgActiveAIKey(orgId) || (
-    process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
-      ? { provider: 'gemini', key: process.env.GEMINI_API_KEY }
-      : undefined
-  );
+  const activeAI = getOrgActiveAIKey(orgId);
 
   if (!activeAI || articles.length === 0) {
     return fallbackKeywordSearch(query, articles);
@@ -463,14 +521,10 @@ async function generateGenericAISuggestion(provider: string, apiKey: string, pro
 
 // Generate suggested response using RAG
 async function generateAISuggestion(conversationId: string, customerQuery: string, orgId: string): Promise<string> {
-  const activeAI = getOrgActiveAIKey(orgId) || (
-    process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
-      ? { provider: 'gemini', key: process.env.GEMINI_API_KEY }
-      : undefined
-  );
+  const activeAI = getOrgActiveAIKey(orgId);
 
   if (!activeAI) {
-    return "💡 Configure an API key in the Hub Configuration (Settings > Register New Key) or in the Settings > Secrets panel in AI Studio to enable automatic RAG suggested replies.";
+    return "💡 Configure an API key in Settings > AI Provider to enable automatic RAG suggested replies.";
   }
 
   // Fetch relevant KB articles
@@ -985,15 +1039,231 @@ async function startServer() {
 
   // --- Protected App API Endpoints ---
 
+  // Helper to decrypt key if encrypted, otherwise return as-is
+  const getDecryptedOrRawKey = (k: any) => {
+    if (k.isEncrypted && k.apiKey) {
+      try {
+        return decrypt(k.apiKey);
+      } catch (err) {
+        console.error('Decryption failed for display:', err);
+      }
+    }
+    return k.apiKey || '';
+  };
+
   // Get settings (Protected & Tenant Isolated)
   app.get('/api/settings', requireAuth, (req: any, res: any) => {
-    res.json(getSettings(req.orgId));
+    const rawSettings = getSettings(req.orgId);
+    const settings = JSON.parse(JSON.stringify(rawSettings));
+    if (settings.apiKeys) {
+      settings.apiKeys = settings.apiKeys.map((k: any) => {
+        const realKey = getDecryptedOrRawKey(k);
+        return {
+          ...k,
+          apiKey: realKey && realKey.length > 10
+            ? `${realKey.substring(0, 6)}••••••••${realKey.substring(realKey.length - 4)}`
+            : '••••••••••••'
+        };
+      });
+    }
+    res.json(settings);
   });
 
   // Update settings (Protected & Tenant Isolated)
   app.post('/api/settings', requireAuth, (req: any, res: any) => {
+    const existing = getSettings(req.orgId);
+    if (req.body.apiKeys && Array.isArray(req.body.apiKeys)) {
+      req.body.apiKeys = req.body.apiKeys.map((incomingKey: any) => {
+        if (incomingKey.apiKey && incomingKey.apiKey.includes('••••')) {
+          const original = existing.apiKeys?.find(ok => ok.id === incomingKey.id);
+          if (original) {
+            return { ...incomingKey, apiKey: original.apiKey, isEncrypted: original.isEncrypted };
+          }
+        }
+        // If it's a new key or modified key, encrypt it using AES-256-GCM
+        if (incomingKey.apiKey && incomingKey.apiKey.trim() !== '') {
+          try {
+            return {
+              ...incomingKey,
+              apiKey: encrypt(incomingKey.apiKey.trim()),
+              isEncrypted: true
+            };
+          } catch (encErr) {
+            console.error('Encryption failed for incoming key:', encErr);
+          }
+        }
+        return incomingKey;
+      });
+    }
     const settings = updateSettings(req.orgId, req.body);
-    res.json(settings);
+    const responseSettings = JSON.parse(JSON.stringify(settings));
+    if (responseSettings.apiKeys) {
+      responseSettings.apiKeys = responseSettings.apiKeys.map((k: any) => {
+        const realKey = getDecryptedOrRawKey(k);
+        return {
+          ...k,
+          apiKey: realKey && realKey.length > 10
+            ? `${realKey.substring(0, 6)}••••••••${realKey.substring(realKey.length - 4)}`
+            : '••••••••••••'
+        };
+      });
+    }
+    res.json(responseSettings);
+  });
+
+  // GET /api/v1/settings/ai-key -> Returns active provider info
+  app.get('/api/v1/settings/ai-key', requireAuth, (req: any, res: any) => {
+    const activeAI = getOrgActiveAIKey(req.orgId);
+    if (activeAI) {
+      const masked = activeAI.key.length > 10
+        ? `${activeAI.key.substring(0, 6)}••••••••${activeAI.key.substring(activeAI.key.length - 4)}`
+        : '••••••••••••';
+      res.json({
+        provider: activeAI.provider,
+        status: 'connected',
+        maskedPreview: masked,
+        model: activeAI.model || (activeAI.provider === 'gemini' ? 'gemini-2.5-flash' : 'gpt-4o-mini')
+      });
+    } else {
+      res.json({
+        provider: null,
+        status: 'not_set',
+        maskedPreview: null,
+        model: null
+      });
+    }
+  });
+
+  // POST /api/v1/settings/ai-key/test -> Validates a key without saving
+  app.post('/api/v1/settings/ai-key/test', requireAuth, async (req: any, res: any) => {
+    const { provider, apiKey, model } = req.body;
+    if (!provider || !apiKey) {
+      return res.status(400).json({ error: 'Provider and API key are required for testing.' });
+    }
+
+    try {
+      const p = provider.toLowerCase();
+      if (p.includes('gemini') || p.includes('google')) {
+        const ai = getGemini(apiKey);
+        if (!ai) {
+          return res.status(400).json({ status: 'invalid', error: 'Could not initialize GoogleGenAI client with the provided key.' });
+        }
+        const modelToUse = model || 'gemini-2.5-flash';
+        const response = await ai.models.generateContent({
+          model: modelToUse,
+          contents: 'Ping',
+          config: { maxOutputTokens: 1 }
+        });
+        if (response && response.text) {
+          return res.json({ status: 'connected', message: 'Connection successful!' });
+        } else {
+          return res.status(400).json({ status: 'invalid', error: 'No response received from Gemini API.' });
+        }
+      } else if (p.includes('openai')) {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: model || 'gpt-4o-mini',
+            messages: [{ role: 'user', content: 'Ping' }],
+            max_tokens: 1
+          })
+        });
+        if (response.ok) {
+          return res.json({ status: 'connected', message: 'Connection successful!' });
+        } else {
+          const errText = await response.text();
+          return res.status(400).json({ status: 'invalid', error: `OpenAI returned error: ${response.status} - ${errText}` });
+        }
+      } else {
+        // Assume ok for other custom names to allow them
+        return res.json({ status: 'connected', message: `Verification simulated successfully for custom provider ${provider}.` });
+      }
+    } catch (error: any) {
+      console.error('API key test error:', error);
+      return res.status(500).json({ status: 'invalid', error: error.message || 'Verification request failed.' });
+    }
+  });
+
+  // POST /api/v1/settings/ai-key/save -> Encrypts and saves the active AI key
+  app.post('/api/v1/settings/ai-key/save', requireAuth, (req: any, res: any) => {
+    const { provider, apiKey, model } = req.body;
+    if (!provider || !apiKey) {
+      return res.status(400).json({ error: 'Provider and API key are required.' });
+    }
+
+    try {
+      const settings = getSettings(req.orgId);
+      const existingKeys = settings.apiKeys || [];
+
+      // Encrypt the key
+      const encryptedKey = encrypt(apiKey.trim());
+
+      // Deactivate other AI keys
+      const updatedKeys = existingKeys.map(k => {
+        const nameLower = k.providerName.toLowerCase();
+        const isAI = nameLower.includes('gemini') || nameLower.includes('google') || nameLower.includes('openai') || nameLower.includes('anthropic') || nameLower.includes('deepseek');
+        if (isAI) {
+          return { ...k, status: 'inactive' as const };
+        }
+        return k;
+      });
+
+      // Check if this provider key already exists to overwrite, otherwise add new
+      const existingIndex = updatedKeys.findIndex(k => k.providerName.toLowerCase() === provider.toLowerCase());
+      
+      const newKeyObj: any = {
+        id: existingIndex !== -1 ? updatedKeys[existingIndex].id : `key_${Date.now()}`,
+        providerName: provider,
+        apiKey: encryptedKey,
+        description: `Active ${provider} Key`,
+        status: 'active' as const,
+        createdAt: existingIndex !== -1 ? updatedKeys[existingIndex].createdAt : new Date().toISOString(),
+        model: model,
+        isEncrypted: true
+      };
+
+      if (existingIndex !== -1) {
+        updatedKeys[existingIndex] = newKeyObj;
+      } else {
+        updatedKeys.push(newKeyObj);
+      }
+
+      updateSettings(req.orgId, { apiKeys: updatedKeys });
+
+      const masked = apiKey.length > 10
+        ? `${apiKey.substring(0, 6)}••••••••${apiKey.substring(apiKey.length - 4)}`
+        : '••••••••••••';
+
+      res.json({
+        status: 'connected',
+        provider: provider,
+        model: model,
+        maskedPreview: masked
+      });
+    } catch (err: any) {
+      console.error('Save AI key error:', err);
+      res.status(500).json({ error: err.message || 'Failed to save AI key.' });
+    }
+  });
+
+  // DELETE /api/v1/settings/ai-key -> Removes the key
+  app.delete('/api/v1/settings/ai-key', requireAuth, (req: any, res: any) => {
+    const settings = getSettings(req.orgId);
+    if (settings.apiKeys) {
+      const updatedKeys = settings.apiKeys.map(k => {
+        const provider = detectAIProvider(k.providerName, k.apiKey);
+        if (provider) {
+          return { ...k, status: 'inactive' as const };
+        }
+        return k;
+      });
+      updateSettings(req.orgId, { apiKeys: updatedKeys });
+    }
+    res.json({ success: true, message: 'AI provider key removed/deactivated.' });
   });
 
   // Conversations APIs (Protected & Tenant Isolated)
@@ -1323,14 +1593,14 @@ async function startServer() {
     // Predefined simulated technical profiles of guest visitors
     const SIMULATED_PROFILES = [
       {
-        name: 'Grace Hopper',
-        email: 'grace@compiler-tech.io',
-        companyName: 'Compiler Tech',
+        name: 'Enterprise Partner',
+        email: 'client@enterprise.io',
+        companyName: 'Enterprise SaaS Corp',
         avatarUrl: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&h=150&fit=crop&crop=faces',
         phone: '+1 (202) 555-0143',
         location: 'Washington, DC (IP: 108.162.21.7)',
         browserInfo: 'Firefox Developer Edition 127.0 on macOS Sonoma',
-        notes: 'Pioneer of the Compiler project. Working on critical COBOL migration.',
+        notes: 'Enterprise account. Working on critical systems migration.',
         problems: [
           {
             text: 'Hello, we are seeing random 502 Bad Gateway errors when uploading large binary files (around 45MB) to your `/api/v2/deploy` endpoint. Is there a payload limit or connection timeout on your load balancer?',
@@ -1340,14 +1610,14 @@ async function startServer() {
         ]
       },
       {
-        name: 'Dennis Ritchie',
-        email: 'dennis@bell-labs.com',
-        companyName: 'Bell Labs',
+        name: 'Business Partner',
+        email: 'contact@partner-labs.com',
+        companyName: 'Bell Labs Support',
         avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=faces',
         phone: '+1 (908) 555-0176',
         location: 'Murray Hill, NJ (IP: 198.51.100.82)',
         browserInfo: 'Safari 17.5 on macOS',
-        notes: 'Creator of the C language and Unix co-developer.',
+        notes: 'Technical partner. Custom database schema exporter integration.',
         problems: [
           {
             text: 'Hi there, we need to export our database schemas in Drizzle or standard SQL. Is there an automated tool in the Settings panel, or do we have to pull them via the REST admin API?',
@@ -1357,14 +1627,14 @@ async function startServer() {
         ]
       },
       {
-        name: 'Ada Lovelace',
-        email: 'ada@analytical-engine.org',
-        companyName: 'Analytical Engine',
+        name: 'System Integrator',
+        email: 'integrations@analytical-engine.org',
+        companyName: 'Analytical Systems',
         avatarUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&h=150&fit=crop&crop=faces',
         phone: '+1 (718) 555-0111',
         location: 'London, UK (IP: 82.165.101.44)',
         browserInfo: 'Chrome 126.0 on Windows 11',
-        notes: 'The world\'s first computer programmer.',
+        notes: 'SAML SSO integration architect.',
         problems: [
           {
             text: 'URGENT: Our team SAML SSO login is failing for all users with "Signature verification failed". We updated our Okta certificate this morning. Where can we paste our new X.509 public certificate?',
@@ -1374,14 +1644,14 @@ async function startServer() {
         ]
       },
       {
-        name: 'Linus Torvalds',
-        email: 'torvalds@kernel.org',
-        companyName: 'Linux Kernel Corp',
+        name: 'SaaS Developer',
+        email: 'dev@kernel-systems.org',
+        companyName: 'Kernel Corp',
         avatarUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&h=150&fit=crop&crop=faces',
         phone: '+1 (503) 555-0129',
         location: 'Portland, OR (IP: 50.116.32.9)',
         browserInfo: 'Linux x86_64, Chromium 125.0',
-        notes: 'Incredibly direct, values rapid resolutions.',
+        notes: 'SaaS integrator. Direct and values rapid resolutions.',
         problems: [
           {
             text: 'Can we configure multiple webhook destination URLs for the same event type? Right now, when a seat is assigned, we want to notify both our Slack bridge and our internal telemetry microservice.',
@@ -1391,14 +1661,14 @@ async function startServer() {
         ]
       },
       {
-        name: 'Guido van Rossum',
-        email: 'guido@python.org',
-        companyName: 'Python Foundation',
+        name: 'Technical Contact',
+        email: 'support-liaison@python.org',
+        companyName: 'Python Systems',
         avatarUrl: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&h=150&fit=crop&crop=faces',
         phone: '+1 (408) 555-0158',
         location: 'Silicon Valley, CA (IP: 172.56.33.20)',
         browserInfo: 'Chrome 125.0 on macOS',
-        notes: 'BDFL of Python. Loves elegant indentation and simple scripts.',
+        notes: 'Loves clean architecture, simple integration scripts.',
         problems: [
           {
             text: 'Hi support team, is there a rate-limiting policy on the search endpoint? We are getting sporadic 429 status codes during our high-concurrency CI/CD pipeline runs.',
@@ -1408,14 +1678,14 @@ async function startServer() {
         ]
       },
       {
-        name: 'Margaret Hamilton',
-        email: 'margaret@apollo-guidance.gov',
+        name: 'Operations Manager',
+        email: 'operations@apollo-guidance.gov',
         companyName: 'NASA AGC',
         avatarUrl: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=150&h=150&fit=crop&crop=faces',
         phone: '+1 (617) 555-0182',
         location: 'Boston, MA (IP: 18.9.22.1)',
         browserInfo: 'Chrome 126.0 on macOS',
-        notes: 'Director of the Software Engineering Division for Apollo guidance computer.',
+        notes: 'Operations specialist managing account-level billing structure.',
         problems: [
           {
             text: 'Our analytics dashboard is showing a discrepancy between seat usage and the billing invoice total. It lists 14 active seats but we were charged for 18. Can someone audit our account records?',

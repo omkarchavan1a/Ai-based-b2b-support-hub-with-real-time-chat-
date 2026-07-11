@@ -53,8 +53,20 @@ export default function App() {
   const [isTourOpen, setIsTourOpen] = useState(false);
   const [isConnectionPopoverOpen, setIsConnectionPopoverOpen] = useState(false);
   const [isWsSimulatedOffline, setIsWsSimulatedOffline] = useState(false);
+  const [hasAIConfigured, setHasAIConfigured] = useState<boolean>(true);
 
   const socketRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (currentUser && currentUser.orgId) {
+      fetch(`/api/health?orgId=${currentUser.orgId}`)
+        .then(res => res.json())
+        .then(data => {
+          setHasAIConfigured(data.hasGeminiKey);
+        })
+        .catch(err => console.error(err));
+    }
+  }, [currentUser, activeTab]);
 
   useEffect(() => {
     fetch('/api/db-status')
@@ -593,7 +605,7 @@ export default function App() {
                   key={tab.id}
                   id={tab.id === 'kb' ? 'tour-nav-kb' : undefined}
                   onClick={() => setActiveTab(tab.id as any)}
-                  className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all ${
+                  className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all relative ${
                     activeTab === tab.id
                       ? 'bg-zinc-800 text-indigo-400 border-l-2 border-indigo-500'
                       : 'text-zinc-500 hover:text-zinc-300'
@@ -601,6 +613,9 @@ export default function App() {
                   title={tab.label}
                 >
                   <Icon className="w-5 h-5" />
+                  {tab.id === 'settings' && !hasAIConfigured && (
+                    <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-rose-500 rounded-full border border-zinc-900 animate-pulse animate-duration-1000" title="AI Configuration Required" />
+                  )}
                 </button>
               );
             })}
