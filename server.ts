@@ -24,7 +24,7 @@ import {
   initPgDb
 } from './src/server/db';
 import { Message, Conversation, KBArticle, AISuggestionLog } from './src/types';
-import { isPgActive, pgDeleteConversation, pgDeleteConversations, pgDeleteCustomers, pgDeleteKbArticle } from './src/server/postgres';
+import { isPgActive, pgDeleteConversation, pgDeleteConversations, pgDeleteCustomers, pgDeleteKbArticle, pgResetWorkspaceData, pgDeleteWorkspace } from './src/server/postgres';
 import {
   getClientIp,
   checkRateLimit,
@@ -1690,12 +1690,88 @@ async function startServer() {
       }
     });
     
-    res.json({ 
-      success: true, 
-      count: deleteIds.length, 
+    res.json({
+      success: true,
+      count: deleteIds.length,
       ids: deleteIds,
       deletedCustomerIds: deleteCustomerIds
     });
+  });
+
+  // Fresh start: delete ALL ticket data for the org (conversations, messages,
+  // customers, AI logs). Keeps users, KB articles and settings intact.
+  app.delete('/api/workspace/data', requireAuth, (req: any, res: any) => {
+    const orgId = req.orgId;
+    const db = getDb();
+    const convIds = db.conversations.filter(c => c.orgId === orgId).map(c => c.id);
+    const customerIds = db.customers.filter(c => c.orgId === orgId).map(c => c.id);
+
+    db.conversations = db.conversations.filter(c => c.orgId !== orgId);
+    db.messages = db.messages.filter(m => !convIds.includes(m.conversationId));
+    db.aiSuggestionsLogs = db.aiSuggestionsLogs.filter(l => !convIds.includes(l.conversationId));
+    db.customers = db.customers.filter(c => c.orgId !== orgId);
+    saveDb(db);
+
+    if (isPgActive()) {
+      pgResetWorkspaceData(orgId).catch(err => console.error('pgResetWorkspaceData error:', err));
+    }
+
+    // Disconnect widget sockets for deleted customers
+    customerIds.forEach(id => {
+      const ws = customers.get(id);
+      if (ws) {
+        try { ws.close(4000, 'Workspace reset'); } catch (e) {}
+        customers.delete(id);
+      }
+    });
+
+    const payload = JSON.stringify({ type: 'workspace:reset', orgId });
+    agents.forEach(agent => {
+      if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === orgId) {
+        agent.send(payload);
+      }
+    });
+
+    res.json({ success: true, conversations: convIds.length, customers: customerIds.length });
+  });
+
+  // Delete the entire workspace (org + users + KB + settings + all data).
+  // The caller's token is invalid after this — frontend must log out.
+  app.delete('/api/workspace', requireAuth, (req: any, res: any) => {
+    const orgId = req.orgId;
+    const db = getDb();
+    const convIds = db.conversations.filter(c => c.orgId === orgId).map(c => c.id);
+    const customerIds = db.customers.filter(c => c.orgId === orgId).map(c => c.id);
+
+    db.conversations = db.conversations.filter(c => c.orgId !== orgId);
+    db.messages = db.messages.filter(m => !convIds.includes(m.conversationId));
+    db.aiSuggestionsLogs = db.aiSuggestionsLogs.filter(l => !convIds.includes(l.conversationId));
+    db.customers = db.customers.filter(c => c.orgId !== orgId);
+    db.kbArticles = db.kbArticles.filter(a => a.orgId !== orgId);
+    db.settings = db.settings.filter(s => s.orgId !== orgId);
+    db.users = db.users.filter(u => u.orgId !== orgId);
+    db.organizations = db.organizations.filter(o => o.id !== orgId);
+    saveDb(db);
+
+    if (isPgActive()) {
+      pgDeleteWorkspace(orgId).catch(err => console.error('pgDeleteWorkspace error:', err));
+    }
+
+    customerIds.forEach(id => {
+      const ws = customers.get(id);
+      if (ws) {
+        try { ws.close(4000, 'Workspace deleted'); } catch (e) {}
+        customers.delete(id);
+      }
+    });
+    const payload = JSON.stringify({ type: 'workspace:deleted', orgId });
+    agents.forEach(agent => {
+      if (agent.readyState === WebSocket.OPEN && (agent as any).orgId === orgId) {
+        try { agent.send(payload); } catch (e) {}
+      }
+    });
+
+    res.json({ success: true });
   });
 
   // Post route to generate a rich simulated guest/anonymous visitor conversation

@@ -14,9 +14,11 @@ import { SupportSettings, ProjectApiKey } from '../types';
 interface SettingsViewProps {
   orgId: string;
   token: string;
+  onWorkspaceReset?: () => void;
+  onWorkspaceDeleted?: () => void;
 }
 
-export default function SettingsView({ orgId, token }: SettingsViewProps) {
+export default function SettingsView({ orgId, token, onWorkspaceReset, onWorkspaceDeleted }: SettingsViewProps) {
   const [settings, setSettings] = useState<SupportSettings | null>(null);
   const [isSaved, setIsSaved] = useState(false);
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
@@ -369,6 +371,67 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
     });
     setApiKeys(updatedKeys);
     handleSave(updatedKeys);
+  };
+
+  // Danger Zone: workspace fresh-start / delete
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmDeleteWs, setConfirmDeleteWs] = useState(false);
+  const [dangerError, setDangerError] = useState('');
+  const [dangerBusy, setDangerBusy] = useState(false);
+
+  const handleFreshStart = async () => {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      setDangerError('');
+      setTimeout(() => setConfirmReset(false), 5000);
+      return;
+    }
+    setDangerBusy(true);
+    setDangerError('');
+    try {
+      const res = await fetch('/api/workspace/data', {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDangerError(data.error || `Fresh start failed (server ${res.status}). Is the backend running?`);
+        return;
+      }
+      setConfirmReset(false);
+      onWorkspaceReset?.();
+    } catch (err: any) {
+      setDangerError('Could not reach the server. Make sure it is running on the same origin (npm run dev → http://localhost:3000).');
+    } finally {
+      setDangerBusy(false);
+    }
+  };
+
+  const handleDeleteWorkspace = async () => {
+    if (!confirmDeleteWs) {
+      setConfirmDeleteWs(true);
+      setDangerError('');
+      setTimeout(() => setConfirmDeleteWs(false), 5000);
+      return;
+    }
+    setDangerBusy(true);
+    setDangerError('');
+    try {
+      const res = await fetch('/api/workspace', {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDangerError(data.error || `Delete failed (server ${res.status}). Is the backend running?`);
+        return;
+      }
+      onWorkspaceDeleted?.();
+    } catch (err: any) {
+      setDangerError('Could not reach the server. Make sure it is running on the same origin (npm run dev → http://localhost:3000).');
+    } finally {
+      setDangerBusy(false);
+    }
   };
 
   const embedCode = `<!-- AI B2B Support Hub Real-time Widget snippet -->
@@ -1025,6 +1088,46 @@ export default function SettingsView({ orgId, token }: SettingsViewProps) {
               ) : (
                 <Copy className="w-3.5 h-3.5" />
               )}
+            </button>
+          </div>
+        </div>
+
+        {/* Danger Zone: fresh start / delete workspace */}
+        <div className="bg-white border border-rose-200 rounded-2xl p-5 shadow-sm space-y-4">
+          <h3 className="text-xs font-semibold text-rose-700 font-display flex items-center">
+            <AlertTriangle className="w-4 h-4 mr-1.5" /> Danger Zone — Workspace Data
+          </h3>
+          <p className="text-[10px] text-zinc-500">
+            Fresh start deletes all conversations, messages, customers and AI logs for this workspace (agents, KB and settings are kept).
+            Deleting the workspace removes everything including the organization — you will be signed out.
+          </p>
+          {dangerError && (
+            <p className="text-[10px] font-semibold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">{dangerError}</p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleFreshStart}
+              disabled={dangerBusy}
+              className={`px-4 py-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer border ${
+                confirmReset
+                  ? 'bg-rose-600 border-rose-600 text-white animate-pulse'
+                  : 'bg-white hover:bg-rose-50 border-zinc-200 hover:border-rose-200 text-zinc-600 hover:text-rose-600'
+              }`}
+            >
+              {confirmReset ? 'Click again to confirm fresh start' : 'Fresh start (delete all tickets)'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteWorkspace}
+              disabled={dangerBusy}
+              className={`px-4 py-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer border ${
+                confirmDeleteWs
+                  ? 'bg-zinc-900 border-zinc-900 text-white animate-pulse'
+                  : 'bg-white hover:bg-zinc-100 border-zinc-200 text-zinc-600'
+              }`}
+            >
+              {confirmDeleteWs ? 'Click again to delete workspace' : 'Delete workspace'}
             </button>
           </div>
         </div>

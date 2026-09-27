@@ -554,3 +554,28 @@ export async function pgDeleteCustomers(ids: string[]): Promise<void> {
 export async function pgDeleteKbArticle(id: string): Promise<void> {
   await query('DELETE FROM kb_articles WHERE id = $1', [id]);
 }
+
+// Workspace fresh-start: remove all ticket/customer/AI-log data for an org,
+// keeping users, KB articles and settings intact.
+export async function pgResetWorkspaceData(orgId: string): Promise<{ conversations: number; customers: number }> {
+  await query(
+    'DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE org_id = $1)',
+    [orgId]
+  );
+  await query(
+    'DELETE FROM ai_suggestions_logs WHERE conversation_id IN (SELECT id FROM conversations WHERE org_id = $1)',
+    [orgId]
+  );
+  const convs = await query('DELETE FROM conversations WHERE org_id = $1', [orgId]);
+  const custs = await query('DELETE FROM customers WHERE org_id = $1', [orgId]);
+  return { conversations: convs.rowCount || 0, customers: custs.rowCount || 0 };
+}
+
+// Full workspace delete: reset data plus KB, settings, users and the org row.
+export async function pgDeleteWorkspace(orgId: string): Promise<void> {
+  await pgResetWorkspaceData(orgId);
+  await query('DELETE FROM kb_articles WHERE org_id = $1', [orgId]);
+  await query('DELETE FROM settings WHERE org_id = $1', [orgId]);
+  await query('DELETE FROM users WHERE org_id = $1', [orgId]);
+  await query('DELETE FROM organizations WHERE id = $1', [orgId]);
+}

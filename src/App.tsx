@@ -354,6 +354,15 @@ export default function App() {
           }
           return current;
         });
+      } else if (type === 'workspace:reset') {
+        setConversations([]);
+        setAllCustomers([]);
+        setSelectedConversation(null);
+        setMessages([]);
+        setAiSuggestion(null);
+        setTypingState(null);
+      } else if (type === 'workspace:deleted') {
+        handleLogout();
       }
     };
 
@@ -1006,7 +1015,20 @@ export default function App() {
         ) : activeTab === 'analytics' ? (
           <AnalyticsView orgId={currentUser.orgId} token={token} allAgents={allAgents} />
         ) : (
-          <SettingsView orgId={currentUser.orgId} token={token} />
+          <SettingsView
+            orgId={currentUser.orgId}
+            token={token}
+            onWorkspaceReset={() => {
+              setConversations([]);
+              setAllCustomers([]);
+              setSelectedConversation(null);
+              setMessages([]);
+              setAiSuggestion(null);
+              setTypingState(null);
+              setActiveTab('chat');
+            }}
+            onWorkspaceDeleted={handleLogout}
+          />
         )}
       </div>
 

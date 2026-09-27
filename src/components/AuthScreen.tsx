@@ -105,8 +105,15 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         } else {
           let errorMsg = 'Incorrect email or password.';
           try {
-            const data = await res.json();
-            errorMsg = data.error || errorMsg;
+            const text = await res.text();
+            try {
+              const data = JSON.parse(text);
+              errorMsg = data.error || errorMsg;
+            } catch (e) {
+              errorMsg = res.status === 404
+                ? 'Server returned 404: the API is not reachable. Run the backend (npm run dev) and open http://localhost:3000 — not a static preview or Vite-only port.'
+                : `Server error (${res.status}). Please try again later.`;
+            }
           } catch (e) {
             errorMsg = `Server error (${res.status}). Please try again later.`;
           }
@@ -154,14 +161,21 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         } else {
           let errorMsg = 'Registration failed. Please check inputs.';
           try {
-            const data = await res.json();
-            errorMsg = data.error || errorMsg;
-          } catch (e) {
-            if (res.status === 413) {
-              errorMsg = 'Profile photo is too large. Please select a smaller photo or a preset.';
-            } else {
-              errorMsg = `Server returned an error (${res.status}). Please try again.`;
+            const text = await res.text();
+            try {
+              const data = JSON.parse(text);
+              errorMsg = data.error || errorMsg;
+            } catch (e) {
+              if (res.status === 413) {
+                errorMsg = 'Profile photo is too large. Please select a smaller photo or a preset.';
+              } else if (res.status === 404) {
+                errorMsg = 'Server returned 404: the API is not reachable. Run the backend (npm run dev) and open http://localhost:3000 — not a static preview or Vite-only port.';
+              } else {
+                errorMsg = `Server returned an error (${res.status}). Please try again.`;
+              }
             }
+          } catch (e) {
+            errorMsg = `Server returned an error (${res.status}). Please try again.`;
           }
           setErrorMessage(errorMsg);
         }
