@@ -63,6 +63,7 @@ export async function POST(req: Request) {
     return json({ token, user: userResponse, org: newOrg }, 201);
   } catch (e: any) {
     console.error('Signup error:', e);
-    return err('An unexpected database error occurred.', 500);
+    const detail = process.env.NODE_ENV === 'production' ? '' : ` (${e?.message ?? e})`;
+    return err(`An unexpected database error occurred${detail}. Check /api/db-status for diagnostics.`, 500);
   }
 }
