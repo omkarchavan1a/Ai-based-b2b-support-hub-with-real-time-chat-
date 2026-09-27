@@ -1,4 +1,6 @@
 node_modules/
+.next/
+out/
 build/
 dist/
 coverage/
@@ -6,3 +8,8 @@ coverage/
 *.log
 .env*
 !.env.example
+# Local SQLite (libsql file DB) — ephemeral on Vercel, use Turso instead
+*.db
+*.db-journal
+data/app.db
+data/app.db-journal
