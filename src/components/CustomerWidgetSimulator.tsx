@@ -155,6 +155,9 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     return saved ? (parseInt(saved, 10) as 1 | 2) : 1;
   });
   const [error, setError] = useState<string | null>(null);
+  const [widgetTicket, setWidgetTicket] = useState<string | null>(() => {
+    return localStorage.getItem('simulated_widget_ticket');
+  });
 
   const socketRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -213,19 +216,23 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     setProblemDescription('');
     setTicketPriority('medium');
     setError(null);
+    setWidgetTicket(null);
 
     localStorage.removeItem('simulated_conversation');
     localStorage.removeItem('simulated_messages');
     localStorage.removeItem('simulated_csat_rating');
+    localStorage.removeItem('simulated_widget_ticket');
   }, [selectedCustomer]);
 
-  const connectWebSocket = (conv: Conversation) => {
+  const connectWebSocket = (conv: Conversation, ticket?: string | null) => {
     if (socketRef.current) {
       socketRef.current.close();
     }
 
+    const activeTicket = ticket ?? widgetTicket;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws?role=customer&customerId=${selectedCustomer.id}&conversationId=${conv.id}`;
+    const ticketParam = activeTicket ? `&ticket=${encodeURIComponent(activeTicket)}` : '';
+    const wsUrl = `${protocol}//${window.location.host}/ws?role=customer&customerId=${selectedCustomer.id}&conversationId=${conv.id}${ticketParam}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {
@@ -259,8 +266,11 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
   // Sync conversation and connect ws on mount if there is a restored session
   useEffect(() => {
     if (conversation) {
+      const authQuery = widgetTicket
+        ? `?ticket=${encodeURIComponent(widgetTicket)}`
+        : `?customerId=${selectedCustomer.id}`;
       // Refresh messages
-      fetch(`/api/conversations/${conversation.id}/messages?customerId=${selectedCustomer.id}`)
+      fetch(`/api/conversations/${conversation.id}/messages${authQuery}`)
         .then(res => {
           if (res.ok) return res.json();
         })
@@ -300,6 +310,8 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     localStorage.removeItem('simulated_messages');
     localStorage.removeItem('simulated_csat_rating');
     localStorage.removeItem('simulated_setup_step');
+    localStorage.removeItem('simulated_widget_ticket');
+    setWidgetTicket(null);
 
     if (socketRef.current) {
       socketRef.current.close();
@@ -357,11 +369,18 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       if (!res.ok) {
         throw new Error('Failed to register support request with server');
       }
-      const conv: Conversation = await res.json();
+      const conv: Conversation & { ticket?: string } = await res.json();
       setConversation(conv);
+      if (conv.ticket) {
+        setWidgetTicket(conv.ticket);
+        localStorage.setItem('simulated_widget_ticket', conv.ticket);
+      }
 
       // 2. Fetch history if any
-      const histRes = await fetch(`/api/conversations/${conv.id}/messages?customerId=${selectedCustomer.id}`);
+      const authQuery = conv.ticket
+        ? `?ticket=${encodeURIComponent(conv.ticket)}`
+        : `?customerId=${selectedCustomer.id}`;
+      const histRes = await fetch(`/api/conversations/${conv.id}/messages${authQuery}`);
       if (histRes.ok) {
         const hist = await histRes.json();
         setMessages(Array.isArray(hist) ? hist : []);
@@ -370,7 +389,7 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       }
 
       // 3. Establish WebSocket connection
-      connectWebSocket(conv);
+      connectWebSocket(conv, conv.ticket || null);
     } catch (err: any) {
       console.error('Failed to start simulator chat:', err);
       setError(err?.message || 'Failed to start simulator chat. Please check connection and try again.');
@@ -403,7 +422,6 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       return [...prev, newMsg];
     });
 
-    const textToSend = inputMessage;
     setInputMessage('');
 
     // Attempt WebSocket transmission if connected
@@ -423,14 +441,22 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     }
 
     // Always persist to database via reliable REST fallback
-    try {
-      await fetch(`/api/conversations/${conversation.id}/messages?customerId=${selectedCustomer.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newMsg)
-      });
-    } catch (err) {
-      console.error('Failed to persist customer message via REST:', err);
+    // NOTE: WS already persists via saveMessage (idempotent by id), so only
+    // use REST when WS is unavailable to avoid duplicate write races.
+    const wsOpen = socketRef.current && socketRef.current.readyState === WebSocket.OPEN;
+    if (!wsOpen) {
+      try {
+        const authQuery = widgetTicket
+          ? `?ticket=${encodeURIComponent(widgetTicket)}`
+          : `?customerId=${selectedCustomer.id}`;
+        await fetch(`/api/conversations/${conversation.id}/messages${authQuery}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newMsg)
+        });
+      } catch (err) {
+        console.error('Failed to persist customer message via REST:', err);
+      }
     }
   };
 

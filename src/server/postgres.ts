@@ -433,15 +433,16 @@ export async function pgSaveMessage(msg: Message): Promise<Message> {
 }
 
 export async function pgUpdateConversationStatus(id: string, status: 'open' | 'pending' | 'closed', rating?: number): Promise<Conversation | null> {
-  const params: any[] = [status, id];
+  const params: any[] = [status];
   let queryStr = 'UPDATE conversations SET status = $1';
   if (rating !== undefined) {
     params.push(rating);
     queryStr += `, csat_score = $${params.length}`;
   }
-  queryStr += ` WHERE id = $${params.length + 1} RETURNING *`;
-  
-  const { rows } = await query(queryStr, [...params]);
+  params.push(id);
+  queryStr += ` WHERE id = $${params.length} RETURNING *`;
+
+  const { rows } = await query(queryStr, params);
   if (rows.length === 0) return null;
   const c = rows[0];
   return {
@@ -528,4 +529,28 @@ export async function pgUpdateSettings(orgId: string, updates: Partial<SupportSe
     [orgId, JSON.stringify(merged.slaConfig), JSON.stringify(merged.businessHours), merged.routingRule, JSON.stringify(merged.apiKeys || [])]
   );
   return merged;
+}
+
+// Delete propagation: pgSaveDb only upserts, so explicit deletes must be issued
+// from the JSON-cache delete paths to keep PG in sync.
+export async function pgDeleteConversation(id: string): Promise<void> {
+  await query('DELETE FROM messages WHERE conversation_id = $1', [id]);
+  await query('DELETE FROM ai_suggestions_logs WHERE conversation_id = $1', [id]);
+  await query('DELETE FROM conversations WHERE id = $1', [id]);
+}
+
+export async function pgDeleteConversations(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await pgDeleteConversation(id);
+  }
+}
+
+export async function pgDeleteCustomers(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await query('DELETE FROM customers WHERE id = $1', [id]);
+  }
+}
+
+export async function pgDeleteKbArticle(id: string): Promise<void> {
+  await query('DELETE FROM kb_articles WHERE id = $1', [id]);
 }

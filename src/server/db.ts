@@ -10,10 +10,8 @@ import {
   KBArticle, AISuggestionLog, SupportSettings 
 } from '../types';
 import { hashPassword } from './auth';
-import { 
-  isPgActive, initPgSchema, pgGetDb, pgSaveDb, 
-  pgSaveMessage, pgUpdateConversationStatus, pgAssignConversation, 
-  pgUpdateSettings 
+import {
+  isPgActive, initPgSchema, pgGetDb, pgSaveDb
 } from './postgres';
 
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
@@ -137,14 +135,8 @@ export async function initPgDb() {
   try {
     // Pass local getDb for migration / seeding if Postgres is empty
     await initPgSchema(getDbLocal);
-    // Fetch and populate the in-memory cache
+    // Fetch and populate the in-memory cache (never wipe existing conversations)
     pgCache = await pgGetDb();
-    if (pgCache) {
-      pgCache.customers = [];
-      pgCache.conversations = [];
-      pgCache.messages = [];
-      await pgSaveDb(pgCache);
-    }
     console.log('PostgreSQL connected and cached successfully.');
   } catch (err) {
     console.error('Failed to initialize PostgreSQL Cache, falling back to local database:', err);
@@ -192,23 +184,13 @@ function getDbLocal(): Schema {
   }
 }
 
-let hasCleanedOnStartup = false;
-
-// Initialize DB file
+// Initialize DB file (never wipes conversations; seed only on first creation)
 export function initDb() {
   if (isPgActive()) {
     // If PG is active, initialization is handled in initPgDb asynchronously at startup.
     return;
   }
-  const db = getDbLocal();
-  if (!hasCleanedOnStartup) {
-    db.customers = [];
-    db.conversations = [];
-    db.messages = [];
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-    hasCleanedOnStartup = true;
-    console.log('Database visitor and conversation data cleared for clean startup as requested.');
-  }
+  getDbLocal();
 }
 
 export function getDb(): Schema {
@@ -261,7 +243,12 @@ export function getMessages(conversationId: string): Message[] {
 
 export function saveMessage(msg: Message): Message {
   const db = getDb();
-  
+
+  // Idempotency: WS + REST dual-write uses the same id — never store twice
+  const existing = db.messages.find(m => m.id === msg.id);
+  if (existing) {
+    return existing;
+  }
   if (!msg.senderAvatarUrl) {
     if (msg.senderType === 'agent') {
       const u = db.users.find(usr => usr.id === msg.senderId);
@@ -283,11 +270,8 @@ export function saveMessage(msg: Message): Message {
   }
   
   saveDb(db);
-  
-  if (isPgActive()) {
-    pgSaveMessage(msg).catch(err => console.error('Asynchronous pgSaveMessage error:', err));
-  }
-  
+
+  // saveDb() already syncs the full schema to PG via pgSaveDb — no extra write needed.
   return msg;
 }
 
@@ -299,12 +283,8 @@ export function updateConversationStatus(id: string, status: 'open' | 'pending' 
     if (rating !== undefined) {
       db.conversations[index].csatScore = rating;
     }
-    saveDb(db);
-    
-    if (isPgActive()) {
-      pgUpdateConversationStatus(id, status, rating).catch(err => console.error('Asynchronous pgUpdateConversationStatus error:', err));
-    }
-    
+    saveDb(db); // saveDb syncs to PG via pgSaveDb
+
     return db.conversations[index];
   }
   return null;
@@ -315,12 +295,8 @@ export function assignConversation(id: string, agentId: string | null): Conversa
   const index = db.conversations.findIndex(c => c.id === id);
   if (index !== -1) {
     db.conversations[index].assignedAgentId = agentId;
-    saveDb(db);
-    
-    if (isPgActive()) {
-      pgAssignConversation(id, agentId).catch(err => console.error('Asynchronous pgAssignConversation error:', err));
-    }
-    
+    saveDb(db); // saveDb syncs to PG via pgSaveDb
+
     return db.conversations[index];
   }
   return null;
@@ -357,11 +333,7 @@ export function updateSettings(orgId: string, updates: Partial<SupportSettings>)
     };
     db.settings.push(newSettings);
   }
-  saveDb(db);
-  
-  if (isPgActive()) {
-    pgUpdateSettings(orgId, updates).catch(err => console.error('Asynchronous pgUpdateSettings error:', err));
-  }
-  
+  saveDb(db); // saveDb syncs to PG via pgSaveDb
+
   return getSettings(orgId);
 }

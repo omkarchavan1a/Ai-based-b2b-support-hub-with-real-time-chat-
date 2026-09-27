@@ -56,6 +56,10 @@ export default function App() {
   const [hasAIConfigured, setHasAIConfigured] = useState<boolean>(true);
 
   const socketRef = useRef<WebSocket | null>(null);
+  const offlineRef = useRef(isWsSimulatedOffline);
+  useEffect(() => {
+    offlineRef.current = isWsSimulatedOffline;
+  }, [isWsSimulatedOffline]);
 
   useEffect(() => {
     if (currentUser && currentUser.orgId) {
@@ -213,7 +217,7 @@ export default function App() {
       socketRef.current.close();
     }
 
-    if (isWsSimulatedOffline) {
+    if (offlineRef.current) {
       setIsConnected(false);
       return;
     }
@@ -356,7 +360,11 @@ export default function App() {
     ws.onclose = () => {
       setIsConnected(false);
       console.log('Agent WebSocket closed, attempting reconnect in 5s...');
-      setTimeout(connectAgentWebSocket, 5000);
+      setTimeout(() => {
+        if (!offlineRef.current) {
+          connectAgentWebSocket(userId, authToken);
+        }
+      }, 5000);
     };
 
     socketRef.current = ws;
@@ -404,10 +412,11 @@ export default function App() {
       return [...prev, newMsg];
     });
 
-    // Attempt WebSocket transmission if connected
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+    // Attempt WebSocket transmission if connected (server persists via saveMessage)
+    const wsOpen = socketRef.current && socketRef.current.readyState === WebSocket.OPEN;
+    if (wsOpen) {
       try {
-        socketRef.current.send(JSON.stringify({
+        socketRef.current!.send(JSON.stringify({
           type: 'message:send',
           message: newMsg
         }));
@@ -416,18 +425,21 @@ export default function App() {
       }
     }
 
-    // Always persist to database via reliable REST fallback
-    try {
-      await fetch(`/api/conversations/${selectedConversation.id}/messages`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token || ''}`
-        },
-        body: JSON.stringify(newMsg)
-      });
-    } catch (err) {
-      console.error('Failed to persist sent message via REST:', err);
+    // REST fallback only when WS is unavailable (saveMessage is idempotent by id,
+    // but skipping the second write avoids broadcast/AI-suggestion duplication)
+    if (!wsOpen) {
+      try {
+        await fetch(`/api/conversations/${selectedConversation.id}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token || ''}`
+          },
+          body: JSON.stringify(newMsg)
+        });
+      } catch (err) {
+        console.error('Failed to persist sent message via REST:', err);
+      }
     }
   };
 
@@ -435,7 +447,10 @@ export default function App() {
     try {
       const res = await fetch(`/api/conversations/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
         body: JSON.stringify(updates)
       });
       if (res.ok) {

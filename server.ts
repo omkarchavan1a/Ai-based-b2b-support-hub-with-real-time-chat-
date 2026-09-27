@@ -5,6 +5,7 @@
 
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
@@ -18,17 +19,17 @@ import {
   getConversations,
   getMessages,
   saveMessage,
-  updateConversationStatus,
-  assignConversation,
   getSettings,
   updateSettings,
   initPgDb
 } from './src/server/db';
 import { Message, Conversation, KBArticle, AISuggestionLog } from './src/types';
-import { isPgActive } from './src/server/postgres';
+import { isPgActive, pgDeleteConversation, pgDeleteConversations, pgDeleteCustomers, pgDeleteKbArticle } from './src/server/postgres';
 import {
   getClientIp,
   checkRateLimit,
+  checkPublicRateLimit,
+  getSessionSecret,
   getAccountLockout,
   recordFailedAttempt,
   resetFailedAttempts,
@@ -91,20 +92,35 @@ function detectAIProvider(providerName: string, apiKey: string): string | undefi
   return undefined;
 }
 
-// AES-256-GCM Encryption / Decryption Utilities
-const ENCRYPTION_KEY = process.env.VAULT_ENC_KEY || 'aistudio-custom-api-key-encryption-key-32chars!'; // Must be 32 bytes
+// AES-256-GCM Encryption / Decryption Utilities (fail-closed in production)
+function getEncryptionKey(): string {
+  const raw = process.env.VAULT_ENC_KEY;
+  if (!raw || raw.trim() === '') {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('VAULT_ENC_KEY must be set to a 32-byte secret in production.');
+    }
+    console.warn('WARNING: VAULT_ENC_KEY is not set. Using dev-only fallback. Set VAULT_ENC_KEY in .env.');
+    return 'dev-only-insecure-vault-key-32chars!';
+  }
+  return raw;
+}
 const IV_LENGTH = 12; // Standard GCM IV is 12 bytes
 
-function encrypt(text: string): string {
-  let key = ENCRYPTION_KEY;
+function normalizeKey(): Buffer {
+  let key = getEncryptionKey();
   if (key.length < 32) {
     key = key.padEnd(32, '0');
   } else if (key.length > 32) {
     key = key.substring(0, 32);
   }
+  return Buffer.from(key);
+}
+
+function encrypt(text: string): string {
+  const key = normalizeKey();
 
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(key), iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag().toString('hex');
@@ -119,18 +135,13 @@ function decrypt(text: string): string {
     throw new Error('Invalid encrypted text format');
   }
 
-  let key = ENCRYPTION_KEY;
-  if (key.length < 32) {
-    key = key.padEnd(32, '0');
-  } else if (key.length > 32) {
-    key = key.substring(0, 32);
-  }
+  const key = normalizeKey();
 
   const iv = Buffer.from(parts[0], 'hex');
   const encryptedText = parts[1]; // Keep as string (hex format)
   const authTag = Buffer.from(parts[2], 'hex');
 
-  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key), iv);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(authTag);
   let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
@@ -579,6 +590,7 @@ async function startServer() {
 
   const app = express();
   const server = http.createServer(app);
+  app.set('trust proxy', 1);
   
   // Parse JSON bodies with a custom size limit to allow base64 profile image uploads
   app.use(express.json({ limit: '15mb' }));
@@ -591,6 +603,25 @@ async function startServer() {
   const agents = new Set<WebSocket>();
   // map from customerId -> websocket
   const customers = new Map<string, WebSocket>();
+
+  // Customer widget ticket: HMAC-bound (customerId.conversationId) so WS/REST
+  // access can't be forged by guessing another customer's id.
+  const signCustomerTicket = (customerId: string, conversationId: string): string => {
+    const sig = crypto.createHmac('sha256', getSessionSecret()).update(`${customerId}.${conversationId}`).digest('base64url');
+    return Buffer.from(`${customerId}.${conversationId}.${sig}`).toString('base64url');
+  };
+  const verifyCustomerTicket = (ticket: string): { customerId: string; conversationId: string } | null => {
+    try {
+      const decoded = Buffer.from(ticket, 'base64url').toString('utf8');
+      const [customerId, conversationId, sig] = decoded.split('.');
+      if (!customerId || !conversationId || !sig) return null;
+      const expected = crypto.createHmac('sha256', getSessionSecret()).update(`${customerId}.${conversationId}`).digest('base64url');
+      if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+      return { customerId, conversationId };
+    } catch {
+      return null;
+    }
+  };
 
   // Upgrade HTTP connections to WebSocket
   server.on('upgrade', (request, socket, head) => {
@@ -608,8 +639,9 @@ async function startServer() {
   wss.on('connection', (ws: WebSocket, request) => {
     const url = new URL(request.url || '', `http://${request.headers.host}`);
     const role = url.searchParams.get('role'); // 'agent' or 'customer'
-    const customerId = url.searchParams.get('customerId');
+    let customerId = url.searchParams.get('customerId');
     const conversationId = url.searchParams.get('conversationId');
+    const ticket = url.searchParams.get('ticket');
 
     if (role === 'agent') {
       const token = url.searchParams.get('token') || '';
@@ -626,6 +658,30 @@ async function startServer() {
       agents.add(ws);
       console.log(`Support agent ${payload.userId} connected to org ${payload.orgId} via WebSocket`);
     } else if (role === 'customer' && customerId) {
+      // If a signed ticket is present, it must verify and match the claimed ids.
+      if (ticket) {
+        const verified = verifyCustomerTicket(ticket);
+        if (!verified || verified.customerId !== customerId || (conversationId && verified.conversationId !== conversationId)) {
+          try {
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: Invalid widget ticket' }));
+            ws.close(3000, 'Unauthorized');
+          } catch (e) {}
+          return;
+        }
+      }
+      // Without a ticket, only allow connecting when the claimed customer owns
+      // the claimed conversation (prevents impersonating arbitrary customerIds).
+      if (!ticket && conversationId) {
+        const dbCheck = getDb();
+        const convCheck = dbCheck.conversations.find(c => c.id === conversationId);
+        if (!convCheck || convCheck.customerId !== customerId) {
+          try {
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: Conversation mismatch' }));
+            ws.close(3000, 'Unauthorized');
+          } catch (e) {}
+          return;
+        }
+      }
       customers.set(customerId, ws);
       console.log(`Customer ${customerId} connected via WebSocket`);
       
@@ -967,15 +1023,7 @@ async function startServer() {
         return res.status(401).json({ error: 'Incorrect email or password.' });
       }
 
-      let isPasswordCorrect = verifyPassword(password, user.passwordHash, user.passwordSalt);
-
-      // Support case-insensitive password input variations for user omkar@omkarit.com
-      if (!isPasswordCorrect && sanitizedEmail === 'omkar@omkarit.com') {
-        const normalizedInput = password.toLowerCase().trim();
-        if (normalizedInput === 'omkarchavan@12') {
-          isPasswordCorrect = true;
-        }
-      }
+      const isPasswordCorrect = verifyPassword(password, user.passwordHash, user.passwordSalt);
 
       if (!isPasswordCorrect) {
         recordFailedAttempt(sanitizedEmail);
@@ -1255,8 +1303,11 @@ async function startServer() {
     const settings = getSettings(req.orgId);
     if (settings.apiKeys) {
       const updatedKeys = settings.apiKeys.map(k => {
-        const provider = detectAIProvider(k.providerName, k.apiKey);
-        if (provider) {
+        // Match on provider name only: stored apiKey may be encrypted (iv:hex:tag)
+        // so key-format detection would never match here.
+        const nameLower = (k.providerName || '').toLowerCase();
+        const isAI = nameLower.includes('gemini') || nameLower.includes('google') || nameLower.includes('openai') || nameLower.includes('anthropic') || nameLower.includes('deepseek') || nameLower.includes('groq') || nameLower.includes('openrouter') || nameLower.includes('cohere');
+        if (isAI) {
           return { ...k, status: 'inactive' as const };
         }
         return k;
@@ -1297,8 +1348,16 @@ async function startServer() {
       }
       return res.json(getMessages(req.params.id));
     } else {
-      // Customer public widget access
-      const customerId = req.query.customerId;
+      // Customer public widget access (ticket preferred, customerId fallback)
+      const customerId = req.query.customerId as string;
+      const ticket = req.query.ticket as string;
+      if (ticket) {
+        const verified = verifyCustomerTicket(ticket);
+        if (!verified || verified.conversationId !== conv.id || verified.customerId !== conv.customerId) {
+          return res.status(403).json({ error: 'Forbidden: Invalid widget ticket.' });
+        }
+        return res.json(getMessages(req.params.id));
+      }
       if (!customerId) {
         return res.status(401).json({ error: 'Unauthorized: Authentication token or customerId is required.' });
       }
@@ -1311,6 +1370,11 @@ async function startServer() {
 
   // Post messages endpoint (Reliable fallback and database persistence)
   app.post('/api/conversations/:id/messages', (req: any, res: any) => {
+    const ip = getClientIp(req);
+    const rl = checkPublicRateLimit(`msg:${ip}`, 120, 60000);
+    if (!rl.allowed) {
+      return res.status(429).json({ error: 'Too many requests. Please try again shortly.' });
+    }
     const authHeader = req.headers.authorization;
     const db = getDb();
     const conv = db.conversations.find(c => c.id === req.params.id);
@@ -1330,26 +1394,43 @@ async function startServer() {
         return res.status(403).json({ error: 'Forbidden: You do not have access to this conversation.' });
       }
     } else {
-      const customerId = req.query.customerId;
-      if (!customerId) {
-        return res.status(401).json({ error: 'Unauthorized: Authentication token or customerId is required.' });
-      }
-      if (conv.customerId !== customerId) {
-        return res.status(403).json({ error: 'Forbidden: You do not have access to this conversation.' });
+      const customerId = req.query.customerId as string;
+      const ticket = (req.query.ticket as string) || (req.body?.ticket as string);
+      if (ticket) {
+        const verified = verifyCustomerTicket(ticket);
+        if (!verified || verified.conversationId !== conv.id || verified.customerId !== conv.customerId) {
+          return res.status(403).json({ error: 'Forbidden: Invalid widget ticket.' });
+        }
+      } else {
+        if (!customerId) {
+          return res.status(401).json({ error: 'Unauthorized: Authentication token or customerId is required.' });
+        }
+        if (conv.customerId !== customerId) {
+          return res.status(403).json({ error: 'Forbidden: You do not have access to this conversation.' });
+        }
       }
     }
 
-    const msg = req.body;
+    const msg = req.body || {};
+    if (typeof msg.content !== 'string' || msg.content.trim().length === 0) {
+      return res.status(400).json({ error: 'Message content is required.' });
+    }
+    if (msg.content.length > 10000) {
+      return res.status(400).json({ error: 'Message content is too long (max 10000 chars).' });
+    }
+    if (!['customer', 'agent', 'system', 'ai'].includes(msg.senderType)) {
+      return res.status(400).json({ error: 'Invalid senderType.' });
+    }
     const newMsg: Message = {
-      id: msg.id || `msg_${Date.now()}`,
+      id: typeof msg.id === 'string' && msg.id.length <= 128 ? msg.id : `msg_${Date.now()}`,
       conversationId: req.params.id,
       senderType: msg.senderType,
-      senderId: msg.senderId,
-      senderName: msg.senderName,
-      content: msg.content,
+      senderId: typeof msg.senderId === 'string' ? msg.senderId.slice(0, 128) : conv.customerId,
+      senderName: typeof msg.senderName === 'string' ? msg.senderName.slice(0, 128).replace(/[<>]/g, '') : 'Visitor',
+      content: msg.content.slice(0, 10000),
       readAt: msg.readAt || null,
       createdAt: msg.createdAt || new Date().toISOString(),
-      senderAvatarUrl: msg.senderAvatarUrl
+      senderAvatarUrl: typeof msg.senderAvatarUrl === 'string' ? msg.senderAvatarUrl.slice(0, 2048) : undefined
     };
 
     const saved = saveMessage(newMsg);
@@ -1422,9 +1503,21 @@ async function startServer() {
 
   // Create a new conversation (Public endpoint for Customer Widget)
   app.post('/api/conversations', (req: any, res: any) => {
-    const { orgId, customerId, channel, priority, tags, problemDescription } = req.body;
+    const ip = getClientIp(req);
+    const rl = checkPublicRateLimit(`conv:${ip}`, 30, 60000);
+    if (!rl.allowed) {
+      return res.status(429).json({ error: 'Too many requests. Please try again shortly.' });
+    }
+    const { orgId, customerId, channel, priority, tags, problemDescription } = req.body || {};
+    if (!customerId || typeof customerId !== 'string' || customerId.length > 128) {
+      return res.status(400).json({ error: 'customerId is required.' });
+    }
+    const allowedPriorities = ['low', 'medium', 'high', 'urgent'];
+    const safePriority = allowedPriorities.includes(priority) ? priority : 'medium';
+    const safeTags = Array.isArray(tags) ? tags.filter(t => typeof t === 'string').slice(0, 10) : [];
+    const safeProblem = typeof problemDescription === 'string' ? problemDescription.slice(0, 5000) : '';
     const db = getDb();
-    
+
     // Check if organization exists, if not fallback to stellar
     const finalOrgId = db.organizations.find(o => o.id === orgId) ? orgId : 'org_stellar';
     
@@ -1458,12 +1551,12 @@ async function startServer() {
       assignedAgentId: null,
       status: 'open',
       channel: channel || 'widget',
-      priority: priority || 'medium',
-      tags: tags || [],
+      priority: safePriority || 'medium',
+      tags: safeTags || [],
       createdAt: new Date().toISOString(),
       lastMessageAt: new Date().toISOString(),
       slaBreachTime: new Date(Date.now() + 120 * 60 * 1000).toISOString(), // 2 hours SLA
-      problemDescription: problemDescription || '',
+      problemDescription: safeProblem || '',
       resolutionNotes: ''
     };
 
@@ -1476,7 +1569,22 @@ async function startServer() {
       }
     });
 
-    res.json(newConv);
+    const ticket = signCustomerTicket(customer.id, newConv.id);
+    res.json({ ...newConv, ticket });
+  });
+
+  // Exchange ids for a signed widget ticket (used for WS + message polling auth)
+  app.post('/api/widget/ticket', (req: any, res: any) => {
+    const { customerId, conversationId } = req.body || {};
+    if (!customerId || !conversationId) {
+      return res.status(400).json({ error: 'customerId and conversationId are required.' });
+    }
+    const db = getDb();
+    const conv = db.conversations.find(c => c.id === conversationId);
+    if (!conv || conv.customerId !== customerId) {
+      return res.status(403).json({ error: 'Conversation mismatch.' });
+    }
+    res.json({ ticket: signCustomerTicket(customerId, conversationId) });
   });
 
   app.patch('/api/conversations/:id', requireAuth, (req: any, res: any) => {
@@ -1564,6 +1672,11 @@ async function startServer() {
     });
 
     saveDb(db);
+    if (isPgActive() && (deleteIds.length > 0 || deleteCustomerIds.length > 0)) {
+      pgDeleteConversations(deleteIds)
+        .then(() => pgDeleteCustomers(deleteCustomerIds))
+        .catch(err => console.error('pg clear-offline delete error:', err));
+    }
     
     // Notify agents via WS
     const payload = JSON.stringify({ 
@@ -1797,11 +1910,14 @@ async function startServer() {
 
       // Remove conversation from database
       db.conversations.splice(index, 1);
-      
+
       // Clean up related messages
       db.messages = db.messages.filter(m => m.conversationId !== req.params.id);
-      
+
       saveDb(db);
+      if (isPgActive()) {
+        pgDeleteConversation(req.params.id).catch(err => console.error('pgDeleteConversation error:', err));
+      }
 
       const payload = JSON.stringify({ type: 'conversation:deleted', id: req.params.id });
       agents.forEach(agent => {
@@ -1893,15 +2009,21 @@ async function startServer() {
   });
 
   app.post('/api/kb', requireAuth, (req: any, res: any) => {
-    const { title, content, category } = req.body;
+    const { title, content, category } = req.body || {};
+    if (typeof title !== 'string' || title.trim().length === 0 || title.length > 200) {
+      return res.status(400).json({ error: 'Title is required (max 200 chars).' });
+    }
+    if (typeof content !== 'string' || content.trim().length === 0 || content.length > 50000) {
+      return res.status(400).json({ error: 'Content is required (max 50000 chars).' });
+    }
     const db = getDb();
-    
+
     const newArticle: KBArticle = {
       id: `kb_${Date.now()}`,
       orgId: req.orgId,
-      title,
-      content,
-      category,
+      title: title.trim().slice(0, 200),
+      content: content.slice(0, 50000),
+      category: typeof category === 'string' ? category.slice(0, 100) : 'General',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -1923,6 +2045,9 @@ async function startServer() {
 
       db.kbArticles.splice(index, 1);
       saveDb(db);
+      if (isPgActive()) {
+        pgDeleteKbArticle(req.params.id).catch(err => console.error('pgDeleteKbArticle error:', err));
+      }
       res.json({ success: true });
     } else {
       res.status(404).json({ error: 'Article not found' });
@@ -1931,10 +2056,15 @@ async function startServer() {
 
   // Public/Widget KB Search
   app.post('/api/kb/search', async (req: any, res: any) => {
-    const { query, orgId } = req.body;
-    if (!query) return res.status(400).json({ error: 'Query is required' });
+    const ip = getClientIp(req);
+    const rl = checkPublicRateLimit(`kb:${ip}`, 60, 60000);
+    if (!rl.allowed) {
+      return res.status(429).json({ error: 'Too many requests. Please try again shortly.' });
+    }
+    const { query, orgId } = req.body || {};
+    if (!query || typeof query !== 'string' || query.length > 1000) return res.status(400).json({ error: 'Query is required (max 1000 chars).' });
     const finalOrgId = orgId || 'org_stellar';
-    const articles = await getRelevantKBArticles(query, finalOrgId);
+    const articles = await getRelevantKBArticles(query.slice(0, 1000), finalOrgId);
     res.json(articles);
   });
 
@@ -1996,6 +2126,11 @@ async function startServer() {
     });
   });
 
+  // JSON 404 for unknown API routes (must come before SPA fallback)
+  app.use('/api', (req, res) => {
+    res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
+  });
+
   // Vite Integration for Assets / Routing
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -2005,9 +2140,21 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    const indexFile = path.join(distPath, 'index.html');
+    if (!fs.existsSync(indexFile)) {
+      console.error(`Production dist/index.html not found at ${indexFile}. Run "npm run build" before "npm start".`);
+    }
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    // Express 4 uses '*', Express 5 uses '/*splat' — register a middleware fallback
+    // that works on both instead of a wildcard route.
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' || req.path.startsWith('/api') || req.path.startsWith('/ws')) {
+        return next();
+      }
+      if (!fs.existsSync(indexFile)) {
+        return res.status(500).json({ error: 'Frontend bundle missing. Run "npm run build" before "npm start".' });
+      }
+      res.sendFile(indexFile);
     });
   }
 
