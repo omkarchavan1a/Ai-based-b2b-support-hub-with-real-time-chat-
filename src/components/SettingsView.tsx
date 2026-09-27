@@ -1135,7 +1135,7 @@ export default function SettingsView({ orgId, token, onWorkspaceReset, onWorkspa
         {/* Global Save Trigger */}
         <div className="flex items-center space-x-3 pt-2">
           <button
-            onClick={handleSave}
+            onClick={() => handleSave()}
             className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition-colors shadow-sm"
           >
             Save Changes

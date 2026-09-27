@@ -55,10 +55,21 @@ export default function App() {
   const [isWsSimulatedOffline, setIsWsSimulatedOffline] = useState(false);
   const [hasAIConfigured, setHasAIConfigured] = useState<boolean>(true);
 
-  const socketRef = useRef<WebSocket | null>(null);
-  const offlineRef = useRef(isWsSimulatedOffline);
+  const tokenRef = useRef<string | null>(null);
+  const selectedRef = useRef<Conversation | null>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const pollingPausedRef = useRef(isWsSimulatedOffline);
   useEffect(() => {
-    offlineRef.current = isWsSimulatedOffline;
+    tokenRef.current = token;
+  }, [token]);
+  useEffect(() => {
+    selectedRef.current = selectedConversation;
+  }, [selectedConversation]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  useEffect(() => {
+    pollingPausedRef.current = isWsSimulatedOffline;
   }, [isWsSimulatedOffline]);
 
   useEffect(() => {
@@ -92,20 +103,10 @@ export default function App() {
     }
   }, [token, currentUser]);
 
-  // Synchronize WS connection drops manually
+  // Live-sync status follows the connection console toggle (polling paused = offline)
   useEffect(() => {
-    if (currentUser && token) {
-      if (isWsSimulatedOffline) {
-        if (socketRef.current) {
-          socketRef.current.close();
-          socketRef.current = null;
-        }
-        setIsConnected(false);
-      } else {
-        connectAgentWebSocket(currentUser.id, token);
-      }
-    }
-  }, [isWsSimulatedOffline]);
+    setIsConnected(!isWsSimulatedOffline && !!currentUser);
+  }, [isWsSimulatedOffline, currentUser]);
 
   // Session verification on mount or when token changes
   useEffect(() => {
@@ -114,11 +115,6 @@ export default function App() {
     } else {
       setIsVerifying(false);
     }
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.close();
-      }
-    };
   }, [token]);
 
   const verifyCurrentSession = async () => {
@@ -131,10 +127,9 @@ export default function App() {
         const data = await res.json();
         setCurrentUser(data.user);
         setActiveAgent(data.user);
-        
+
         // Fetch workspace data using the verified token
         await fetchInitialData(token, data.user);
-        connectAgentWebSocket(data.user.id, token);
       } else {
         handleLogout();
       }
@@ -161,10 +156,9 @@ export default function App() {
     setConversations([]);
     setSelectedConversation(null);
     setMessages([]);
-    if (socketRef.current) {
-      socketRef.current.close();
-      socketRef.current = null;
-    }
+    setAiSuggestion(null);
+    setTypingState(null);
+    setIsConnected(false);
   };
 
   const fetchInitialData = async (authToken: string, agentProfile: AgentType) => {
@@ -212,172 +206,83 @@ export default function App() {
     }
   };
 
-  const connectAgentWebSocket = (userId: string, authToken: string) => {
-    if (socketRef.current) {
-      socketRef.current.close();
-    }
-
-    if (offlineRef.current) {
-      setIsConnected(false);
-      return;
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws?role=agent&userId=${userId}&token=${authToken}`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      console.log('Agent WebSocket connection active');
-    };
-
-    ws.onmessage = (event) => {
-      const payload = JSON.parse(event.data);
-      const { type } = payload;
-
-      if (type === 'message:new') {
-        const { message } = payload;
-        
-        // If this message belongs to the active conversation, append it
-        setSelectedConversation(current => {
-          if (current && current.id === message.conversationId) {
-            setMessages(prev => {
-              if (prev.some(m => m.id === message.id)) return prev;
-              return [...prev, message];
-            });
-          }
-          return current;
+  // REST polling (Next.js architecture — no WebSocket server).
+  // Polls conversation list + active messages + copilot draft every 3s.
+  useEffect(() => {
+    if (!currentUser) return;
+    let cancelled = false;
+    const poll = async () => {
+      if (pollingPausedRef.current || cancelled) return;
+      const authToken = tokenRef.current;
+      if (!authToken) return;
+      try {
+        const convRes = await fetch('/api/conversations', {
+          headers: { 'Authorization': `Bearer ${authToken}` },
         });
-
-        // Update lastMessageAt for conversation in list
-        setConversations(prev => {
-          return prev.map(c => {
-            if (c.id === message.conversationId) {
-              return { ...c, lastMessageAt: message.createdAt };
+        if (convRes.ok) {
+          const convs: Conversation[] = await convRes.json();
+          setConversations(convs);
+          const sel = selectedRef.current;
+          if (sel) {
+            const stillThere = convs.find((c) => c.id === sel.id);
+            if (!stillThere) {
+              selectedRef.current = null;
+              setSelectedConversation(null);
+              setMessages([]);
+              setAiSuggestion(null);
+            } else if (JSON.stringify(stillThere) !== JSON.stringify(sel)) {
+              selectedRef.current = stillThere;
+              setSelectedConversation(stillThere);
             }
-            return c;
+          }
+        }
+      } catch {
+        /* polling is best-effort */
+      }
+      const sel = selectedRef.current;
+      const authToken2 = tokenRef.current;
+      if (sel && authToken2) {
+        try {
+          const msgRes = await fetch(`/api/conversations/${sel.id}/messages`, {
+            headers: { 'Authorization': `Bearer ${authToken2}` },
           });
-        });
-      } else if (type === 'copilot:thinking') {
-        const { conversationId } = payload;
-        setSelectedConversation(current => {
-          if (current && current.id === conversationId) {
-            setAiSuggestion({ text: '', logId: '', isThinking: true });
-          }
-          return current;
-        });
-      } else if (type === 'copilot:suggestion') {
-        const { conversationId, suggestion, logId } = payload;
-        setSelectedConversation(current => {
-          if (current && current.id === conversationId) {
-            setAiSuggestion({ text: suggestion, logId, isThinking: false });
-          }
-          return current;
-        });
-      } else if (type === 'typing:start') {
-        const { conversationId, senderType } = payload;
-        setSelectedConversation(current => {
-          if (current && current.id === conversationId) {
-            setTypingState({ isTyping: true, senderType });
-          }
-          return current;
-        });
-      } else if (type === 'typing:stop') {
-        const { conversationId, senderType } = payload;
-        setSelectedConversation(current => {
-          if (current && current.id === conversationId) {
-            setTypingState(null);
-          }
-          return current;
-        });
-      } else if (type === 'conversation:new') {
-        const { conversation, customer } = payload;
-        setConversations(prev => {
-          if (prev.some(c => c.id === conversation.id)) return prev;
-          return [conversation, ...prev];
-        });
-        if (customer) {
-          setAllCustomers(prev => {
-            const index = prev.findIndex(c => c.id === customer.id);
-            if (index !== -1) {
-              return prev.map(c => c.id === customer.id ? customer : c);
+          if (msgRes.ok) {
+            const data: Message[] = await msgRes.json();
+            const prev = messagesRef.current;
+            if (JSON.stringify(prev) !== JSON.stringify(data)) {
+              messagesRef.current = data;
+              setMessages(data);
             }
-            return [...prev, customer];
-          });
+          }
+        } catch {
+          /* ignore */
         }
-      } else if (type === 'conversation:updated') {
-        const { conversation } = payload;
-        setConversations(prev => prev.map(c => c.id === conversation.id ? conversation : c));
-        setSelectedConversation(current => {
-          if (current && current.id === conversation.id) {
-            return conversation;
+        try {
+          const copRes = await fetch(
+            `/api/copilot/latest?conversationId=${encodeURIComponent(sel.id)}`,
+            { headers: { 'Authorization': `Bearer ${authToken2}` } },
+          );
+          if (copRes.ok) {
+            const data = await copRes.json();
+            if (data && data.suggestion) {
+              setAiSuggestion((prev) => {
+                if (prev && prev.logId === data.logId && !prev.isThinking) return prev;
+                return { text: data.suggestion, logId: data.logId, isThinking: false };
+              });
+            }
           }
-          return current;
-        });
-      } else if (type === 'conversation:deleted') {
-        const { id } = payload;
-        setConversations(prev => prev.filter(c => c.id !== id));
-        setSelectedConversation(current => {
-          if (current && current.id === id) {
-            return null;
-          }
-          return current;
-        });
-      } else if (type === 'customer:status_change') {
-        const { customerId, isOnline } = payload;
-        setAllCustomers(prev => prev.map(c => c.id === customerId ? { ...c, isOnline } : c));
-        setConversations(prev => prev.map(c => c.customerId === customerId ? { ...c, isCustomerOnline: isOnline } : c));
-        setSelectedConversation(current => {
-          if (current && current.customerId === customerId) {
-            return { ...current, isCustomerOnline: isOnline };
-          }
-          return current;
-        });
-      } else if (type === 'agent:status_change') {
-        const { userId, status } = payload;
-        setAllAgents(prev => prev.map(ag => ag.id === userId ? { ...ag, status } : ag));
-        setActiveAgent(current => {
-          if (current && current.id === userId) {
-            return { ...current, status };
-          }
-          return current;
-        });
-      } else if (type === 'conversations:cleared_offline') {
-        const { ids, deletedCustomerIds } = payload;
-        setConversations(prev => prev.filter(c => !ids.includes(c.id)));
-        if (deletedCustomerIds) {
-          setAllCustomers(prev => prev.filter(c => !deletedCustomerIds.includes(c.id)));
+        } catch {
+          /* copilot polling is optional */
         }
-        setSelectedConversation(current => {
-          if (current && ids.includes(current.id)) {
-            return null;
-          }
-          return current;
-        });
-      } else if (type === 'workspace:reset') {
-        setConversations([]);
-        setAllCustomers([]);
-        setSelectedConversation(null);
-        setMessages([]);
-        setAiSuggestion(null);
-        setTypingState(null);
-      } else if (type === 'workspace:deleted') {
-        handleLogout();
       }
     };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-      console.log('Agent WebSocket closed, attempting reconnect in 5s...');
-      setTimeout(() => {
-        if (!offlineRef.current) {
-          connectAgentWebSocket(userId, authToken);
-        }
-      }, 5000);
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
     };
-
-    socketRef.current = ws;
-  };
+  }, [currentUser]);
 
   const handleSelectConversation = async (conv: Conversation, authToken: string = token || '') => {
     setSelectedConversation(conv);
@@ -421,34 +326,18 @@ export default function App() {
       return [...prev, newMsg];
     });
 
-    // Attempt WebSocket transmission if connected (server persists via saveMessage)
-    const wsOpen = socketRef.current && socketRef.current.readyState === WebSocket.OPEN;
-    if (wsOpen) {
-      try {
-        socketRef.current!.send(JSON.stringify({
-          type: 'message:send',
-          message: newMsg
-        }));
-      } catch (err) {
-        console.error('Failed to send message via WebSocket:', err);
-      }
-    }
-
-    // REST fallback only when WS is unavailable (saveMessage is idempotent by id,
-    // but skipping the second write avoids broadcast/AI-suggestion duplication)
-    if (!wsOpen) {
-      try {
-        await fetch(`/api/conversations/${selectedConversation.id}/messages`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token || ''}`
-          },
-          body: JSON.stringify(newMsg)
-        });
-      } catch (err) {
-        console.error('Failed to persist sent message via REST:', err);
-      }
+    // Polling architecture: persist via REST; the poll loop picks it up.
+    try {
+      await fetch(`/api/conversations/${selectedConversation.id}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
+        body: JSON.stringify(newMsg)
+      });
+    } catch (err) {
+      console.error('Failed to persist sent message via REST:', err);
     }
   };
 

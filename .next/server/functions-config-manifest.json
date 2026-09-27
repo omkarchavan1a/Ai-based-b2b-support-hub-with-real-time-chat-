@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "functions": {
+    "/api/analytics": {},
+    "/api/auth/login": {},
+    "/api/auth/logout": {},
+    "/api/auth/me": {},
+    "/api/auth/signup": {},
+    "/api/conversations/[id]/messages": {},
+    "/api/conversations/[id]": {},
+    "/api/conversations/clear-offline": {},
+    "/api/conversations": {},
+    "/api/conversations/simulate": {},
+    "/api/copilot/feedback": {},
+    "/api/copilot/latest": {
+      "maxDuration": 60
+    },
+    "/api/customers/[id]": {},
+    "/api/customers": {},
+    "/api/db-status": {},
+    "/api/health": {},
+    "/api/kb/[id]": {},
+    "/api/kb": {},
+    "/api/kb/search": {
+      "maxDuration": 30
+    },
+    "/api/settings": {},
+    "/api/users": {},
+    "/api/v1/settings/ai-key": {},
+    "/api/v1/settings/ai-key/save": {},
+    "/api/v1/settings/ai-key/test": {
+      "maxDuration": 30
+    },
+    "/api/widget/heartbeat": {},
+    "/api/widget/ticket": {},
+    "/api/workspace/data": {},
+    "/api/workspace": {}
+  }
+}

@@ -159,10 +159,16 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     return localStorage.getItem('simulated_widget_ticket');
   });
 
-  const socketRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isFirstRenderRef = useRef(true);
+  const conversationRef = useRef<Conversation | null>(null);
+  const ticketRef = useRef<string | null>(null);
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
+  useEffect(() => {
+    ticketRef.current = widgetTicket;
+  }, [widgetTicket]);
 
   // Sync state to LocalStorage
   useEffect(() => {
@@ -205,10 +211,6 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
       isFirstRenderRef.current = false;
       return;
     }
-    if (socketRef.current) {
-      socketRef.current.close();
-      socketRef.current = null;
-    }
     setMessages([]);
     setConversation(null);
     setCsatRating(null);
@@ -224,84 +226,35 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     localStorage.removeItem('simulated_widget_ticket');
   }, [selectedCustomer]);
 
-  const connectWebSocket = (conv: Conversation, ticket?: string | null) => {
-    if (socketRef.current) {
-      socketRef.current.close();
-    }
+  // Polling refresh for the widget (Next.js architecture — no WebSocket).
+  const authQueryFor = (ticket: string | null, customerId: string) =>
+    ticket ? `?ticket=${encodeURIComponent(ticket)}` : `?customerId=${customerId}`;
 
-    const activeTicket = ticket ?? widgetTicket;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ticketParam = activeTicket ? `&ticket=${encodeURIComponent(activeTicket)}` : '';
-    const wsUrl = `${protocol}//${window.location.host}/ws?role=customer&customerId=${selectedCustomer.id}&conversationId=${conv.id}${ticketParam}`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onmessage = (event) => {
-      const payload = JSON.parse(event.data);
-      if (payload.type === 'message:new' && payload.message.conversationId === conv.id) {
-        setMessages(prev => {
-          if (prev.some(m => m.id === payload.message.id)) return prev;
-          return [...prev, payload.message];
-        });
-      } else if (payload.type === 'typing:start' && payload.senderType === 'agent') {
-        setIsTyping(true);
-      } else if (payload.type === 'typing:stop' && payload.senderType === 'agent') {
-        setIsTyping(false);
-      } else if (payload.type === 'conversation:updated' && payload.conversation.id === conv.id) {
-        setConversation(payload.conversation);
+  const refreshWidget = async (convId: string, ticket: string | null, customerId: string) => {
+    const authQuery = authQueryFor(ticket, customerId);
+    try {
+      const res = await fetch(`/api/conversations/${convId}/messages${authQuery}`);
+      if (res.ok) {
+        const hist = await res.json();
+        if (Array.isArray(hist)) setMessages(hist);
       }
-    };
-
-    ws.onerror = (err) => {
-      console.error('WebSocket connection error:', err);
-      setError('Real-time connection interrupted. Some updates may fail to load.');
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket closed for visitor widget simulator');
-    };
-
-    socketRef.current = ws;
+    } catch (err) {
+      console.error('Error fetching widget messages:', err);
+    }
   };
 
-  // Sync conversation and connect ws on mount if there is a restored session
+  // Sync conversation and poll on mount if there is a restored session
   useEffect(() => {
-    if (conversation) {
-      const authQuery = widgetTicket
-        ? `?ticket=${encodeURIComponent(widgetTicket)}`
-        : `?customerId=${selectedCustomer.id}`;
-      // Refresh messages
-      fetch(`/api/conversations/${conversation.id}/messages${authQuery}`)
-        .then(res => {
-          if (res.ok) return res.json();
-        })
-        .then(hist => {
-          if (Array.isArray(hist)) {
-            setMessages(hist);
-          }
-        })
-        .catch(err => console.error('Error fetching restored messages:', err));
-
-      // Refresh conversation details
-      fetch(`/api/conversations/${conversation.id}`)
-        .then(res => {
-          if (res.ok) return res.json();
-        })
-        .then(details => {
-          if (details) {
-            setConversation(details);
-          }
-        })
-        .catch(err => console.error('Error fetching restored conversation:', err));
-
-      connectWebSocket(conversation);
+    const conv = conversationRef.current;
+    if (conv) {
+      refreshWidget(conv.id, ticketRef.current, selectedCustomer.id);
     }
-
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.close();
-        socketRef.current = null;
-      }
-    };
+    const id = setInterval(() => {
+      const c = conversationRef.current;
+      if (c) refreshWidget(c.id, ticketRef.current, selectedCustomer.id);
+    }, 3000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const resetSession = () => {
@@ -312,11 +265,6 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
     localStorage.removeItem('simulated_setup_step');
     localStorage.removeItem('simulated_widget_ticket');
     setWidgetTicket(null);
-
-    if (socketRef.current) {
-      socketRef.current.close();
-      socketRef.current = null;
-    }
 
     setMessages([]);
     setConversation(null);
@@ -388,8 +336,8 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
         setMessages([]);
       }
 
-      // 3. Establish WebSocket connection
-      connectWebSocket(conv, conv.ticket || null);
+      // 3. Polling picks up new messages — refresh once immediately.
+      await refreshWidget(conv.id, conv.ticket || null, selectedCustomer.id);
     } catch (err: any) {
       console.error('Failed to start simulator chat:', err);
       setError(err?.message || 'Failed to start simulator chat. Please check connection and try again.');
@@ -424,54 +372,23 @@ export default function CustomerWidgetSimulator({ onClose, orgId, currentUser }:
 
     setInputMessage('');
 
-    // Attempt WebSocket transmission if connected
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      try {
-        if (typingTimeoutRef.current) {
-          clearTimeout(typingTimeoutRef.current);
-        }
-        socketRef.current.send(JSON.stringify({ type: 'typing:stop' }));
-        socketRef.current.send(JSON.stringify({
-          type: 'message:send',
-          message: newMsg
-        }));
-      } catch (err) {
-        console.error('Failed to send customer message via WebSocket:', err);
-      }
-    }
-
-    // Always persist to database via reliable REST fallback
-    // NOTE: WS already persists via saveMessage (idempotent by id), so only
-    // use REST when WS is unavailable to avoid duplicate write races.
-    const wsOpen = socketRef.current && socketRef.current.readyState === WebSocket.OPEN;
-    if (!wsOpen) {
-      try {
-        const authQuery = widgetTicket
-          ? `?ticket=${encodeURIComponent(widgetTicket)}`
-          : `?customerId=${selectedCustomer.id}`;
-        await fetch(`/api/conversations/${conversation.id}/messages${authQuery}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newMsg)
-        });
-      } catch (err) {
-        console.error('Failed to persist customer message via REST:', err);
-      }
+    // Polling architecture: persist via REST.
+    try {
+      const authQuery = widgetTicket
+        ? `?ticket=${encodeURIComponent(widgetTicket)}`
+        : `?customerId=${selectedCustomer.id}`;
+      await fetch(`/api/conversations/${conversation.id}/messages${authQuery}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMsg)
+      });
+    } catch (err) {
+      console.error('Failed to persist customer message via REST:', err);
     }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputMessage(e.target.value);
-
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ type: 'typing:start' }));
-
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-
-      typingTimeoutRef.current = setTimeout(() => {
-        socketRef.current?.send(JSON.stringify({ type: 'typing:stop' }));
-      }, 1500);
-    }
   };
 
   const submitRating = async (rating: number) => {
